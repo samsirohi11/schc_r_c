@@ -65,7 +65,7 @@ Supports direction-aware field identifiers for bidirectional communication:
 
 ```bash
 git clone https://github.com/samsirohi11/schc_r_c.git
-cd schc-rust
+cd schc_r_c
 cargo build --release
 ```
 
