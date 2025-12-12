@@ -14,6 +14,7 @@ readme = "README.md"
 anyhow = "1.0"
 bitvec = "1.0.1"
 clap = { version = "4.0", features = ["derive"] }
+ctrlc = "3.4"
 hex = "0.4"
 pcap-file = "2.0"
 pnet = "0.35"
@@ -32,6 +33,10 @@ path = "src/bin/tree_builder.rs"
 [[bin]]
 name = "compressor"
 path = "src/bin/compressor.rs"
+
+[[bin]]
+name = "live_compressor"
+path = "src/bin/live_compressor.rs"
 
 [profile.release]
 lto = true

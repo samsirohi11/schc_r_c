@@ -178,5 +178,33 @@
       { "FID": "UDP.LEN", "MO": "ignore", "CDA": "compute" },
       { "FID": "UDP.CKSUM", "MO": "ignore", "CDA": "compute" }
     ]
+  },
+  {
+    "RuleID": 70,
+    "RuleIDLength": 8,
+    "Comment": "IPv6 + ICMPv6 Echo Request/Reply (ping6)",
+    "Compression": [
+      { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV6.TC", "TV": 0, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV6.FL", "TV": 0, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV6.LEN", "MO": "ignore", "CDA": "compute" },
+      { "FID": "IPV6.NXT", "TV": 58, "MO": "equal", "CDA": "not-sent" },
+      {
+        "FID": "IPV6.HOP_LMT",
+        "TV": [255, 64],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      {
+        "FID": "IPV6.DEV_PREFIX",
+        "FL": 64,
+        "TV": ["2001:db8::/64", "fe80::/64", "2a01:cb08:8298:6000::/64"],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      { "FID": "IPV6.DEV_IID", "TV": 1, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV6.APP_PREFIX", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV6.APP_IID", "MO": "ignore", "CDA": "value-sent" }
+    ]
   }
 ]
