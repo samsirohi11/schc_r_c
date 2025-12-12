@@ -64,7 +64,7 @@ Supports direction-aware field identifiers for bidirectional communication:
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/schc-rust.git
+git clone https://github.com/samsirohi11/schc_r_c.git
 cd schc-rust
 cargo build --release
 ```
@@ -75,7 +75,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-schc = { git = "https://github.com/yourusername/schc-rust.git" }
+schc = { git = "https://github.com/samsirohi11/schc_r_c.git" }
 ```
 
 ## Usage
