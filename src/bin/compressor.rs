@@ -143,6 +143,7 @@ fn main() -> Result<()> {
                                          } else {
                                              0.0
                                          });
+                                println!("  Original data:     {}", hex::encode(&compressed.original_header_data));
                                 println!("  Compressed data:   {}", hex::encode(&compressed.data));
                                 println!("{}\n", "═".repeat(80));
                             }

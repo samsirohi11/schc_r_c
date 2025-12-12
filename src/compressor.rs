@@ -50,6 +50,8 @@ pub struct CompressedPacket {
     pub rule_id_length: u8,
     pub original_header_bits: usize,
     pub compressed_header_bits: usize,
+    /// Original header bytes (for debugging)
+    pub original_header_data: Vec<u8>,
 }
 
 impl CompressedPacket {
@@ -268,6 +270,7 @@ mod tests {
             rule_id_length: 8,
             original_header_bits: 160,  // 20 bytes
             compressed_header_bits: 8,  // 1 byte
+            original_header_data: Vec::new(),
         };
         
         assert_eq!(packet.savings_bits(), 152);
@@ -282,6 +285,7 @@ mod tests {
             rule_id_length: 8,
             original_header_bits: 160,
             compressed_header_bits: 8,
+            original_header_data: Vec::new(),
         };
         
         assert_eq!(packet.savings_bytes(), 19.0);
@@ -297,6 +301,7 @@ mod tests {
             rule_id_length: 8,
             original_header_bits: 32,   // 4 bytes original
             compressed_header_bits: 80, // 10 bytes compressed (worse!)
+            original_header_data: Vec::new(),
         };
         
         assert_eq!(packet.savings_bits(), -48);

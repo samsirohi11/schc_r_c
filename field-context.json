@@ -174,20 +174,15 @@
       "unit": "bits",
       "description": "CoAP End-of-Options Marker (0xFF)"
     },
-    "QUIC.HEADER_FORM": {
-      "length": 1,
-      "unit": "bits",
-      "description": "QUIC Header Form field (0 for short header, 1 for long header)"
-    },
     "QUIC.FIRST_BYTE": {
       "length": 8,
       "unit": "bits",
-      "description": "QUIC First Byte field (contains version in long header)"
+      "description": "QUIC First Byte. Header form (1=long, 0=short)"
     },
     "QUIC.VERSION": {
       "length": 32,
       "unit": "bits",
-      "description": "QUIC Version field (RFC 9000)"
+      "description": "QUIC Version field (RFC 9000). Only present in long headers."
     }
   }
 }

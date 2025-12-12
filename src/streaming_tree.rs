@@ -67,6 +67,14 @@ pub fn compress_packet(
         })
         .unwrap();
 
+    // Extract original header bytes for display
+    let header_bytes = (best.original_bits + 7) / 8;
+    let original_header_data = if header_bytes > 0 && raw_packet.len() >= parser.ip_start() + header_bytes {
+        raw_packet[parser.ip_start()..parser.ip_start() + header_bytes].to_vec()
+    } else {
+        Vec::new()
+    };
+
     Ok(CompressedPacket {
         data: best.data,
         bit_length: best.compressed_bits,
@@ -74,6 +82,7 @@ pub fn compress_packet(
         rule_id_length: best.rule_id_length,
         original_header_bits: best.original_bits,
         compressed_header_bits: best.compressed_bits,
+        original_header_data,
     })
 }
 

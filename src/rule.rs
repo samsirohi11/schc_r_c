@@ -281,3 +281,132 @@ impl RuleSet {
         Ok(RuleSet { rules })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // MO.val validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_mo_val_valid_within_field_length() {
+        // MO.val = 8 for 16-bit UDP.APP_PORT field - should be valid
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "MO": "MSB", "CDA": "LSB", "MO.val": 8 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_ok(), "Valid MO.val should not error");
+    }
+
+    #[test]
+    fn test_mo_val_equal_to_field_length() {
+        // MO.val = 16 for 16-bit UDP.APP_PORT field - should be valid (edge case)
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "MO": "MSB", "CDA": "LSB", "MO.val": 16 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_ok(), "MO.val equal to field length should be valid");
+    }
+
+    #[test]
+    fn test_mo_val_exceeds_field_length_error() {
+        // MO.val = 20 for 16-bit UDP.APP_PORT field - should error
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "MO": "MSB", "CDA": "LSB", "MO.val": 20 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_err(), "MO.val exceeding field length should error");
+        
+        // Check error message contains relevant info
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("MO.val"), "Error should mention MO.val");
+        assert!(err_msg.contains("20"), "Error should contain the invalid value");
+    }
+
+    #[test]
+    fn test_mo_val_with_explicit_fl() {
+        // MO.val = 14 with explicit FL = 16 - should be valid
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "FL": 16, "MO": "MSB", "CDA": "LSB", "MO.val": 14 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_ok(), "MO.val within explicit FL should be valid");
+    }
+
+    #[test]
+    fn test_mo_val_exceeds_explicit_fl_error() {
+        // MO.val = 20 with explicit FL = 16 - should error
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "FL": 16, "MO": "MSB", "CDA": "LSB", "MO.val": 20 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_err(), "MO.val exceeding explicit FL should error");
+    }
+
+    #[test]
+    fn test_mo_val_zero_is_valid() {
+        // MO.val = 0 should always be valid
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "MO": "MSB", "CDA": "LSB", "MO.val": 0 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_ok(), "MO.val of 0 should be valid");
+    }
+
+    #[test]
+    fn test_non_msb_mo_ignores_mo_val() {
+        // MO = equal should not check MO.val even if present
+        let json = r#"[{
+            "RuleID": 1,
+            "RuleIDLength": 8,
+            "Compression": [
+                { "FID": "UDP.APP_PORT", "TV": 5680, "MO": "equal", "CDA": "not-sent", "MO.val": 100 }
+            ]
+        }]"#;
+        
+        let result = RuleSet::from_json(json);
+        assert!(result.is_ok(), "Non-MSB MO should ignore MO.val validation");
+    }
+
+    // =========================================================================
+    // RuleValue tests
+    // =========================================================================
+
+    #[test]
+    fn test_rule_value_to_string_repr() {
+        assert_eq!(RuleValue::U64(42).to_string_repr(), "42");
+        assert_eq!(RuleValue::String("test".to_string()).to_string_repr(), "test");
+    }
+}

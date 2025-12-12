@@ -226,7 +226,7 @@ impl<'a> StreamingParser<'a> {
             }
 
             // QUIC Fields
-            FieldId::QuicHeaderForm | FieldId::QuicFirstByte | FieldId::QuicVersion => {
+            FieldId::QuicFirstByte | FieldId::QuicVersion => {
                 self.extract_quic_field(fid)
             }
         }
@@ -387,8 +387,8 @@ impl<'a> StreamingParser<'a> {
         // Reuse already-parsed UDP port fields instead of reading raw bytes again
         // QUIC typically uses port 443 (HTTPS over QUIC) or 4433 (alternate QUIC port)
         
-        // Parse UDP application port if not already cached
-        let app_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpAppPort) {
+        // Parse UDP source and destination ports if not already cached
+        let src_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpSrcPort) {
             match val {
                 FieldValue::U16(p) => *p,
                 _ => return Ok(None),
@@ -397,8 +397,17 @@ impl<'a> StreamingParser<'a> {
             return Ok(None);
         };
 
+        let dst_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpDstPort) {
+            match val {
+                FieldValue::U16(p) => *p,
+                _ => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+        
         // Only parse QUIC if either port is 443 or 4433
-        if app_port != 443 && app_port != 4433 {
+        if src_port != 443 && src_port != 4433 && dst_port != 443 && dst_port != 4433 {
             return Ok(None);
         }
         
@@ -444,16 +453,10 @@ impl<'a> StreamingParser<'a> {
         let is_long_header = header_form == 1;
 
         match fid {
-            FieldId::QuicHeaderForm => {
-                // Return the header form bit (1 bit value, but stored as U8)
-                Ok(Some(FieldValue::U8(header_form)))
-            }
             FieldId::QuicFirstByte => {
-                // Return the entire first byte (should be kept as value-sent)
                 Ok(Some(FieldValue::U8(first_byte)))
             }
             FieldId::QuicVersion => {
-                // Version field is only present in long headers (header form = 1)
                 if !is_long_header {
                     // Short header has no version field
                     return Ok(None);
@@ -501,7 +504,7 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::Ipv6DstPrefix, FieldId::Ipv6DstIid,
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
-            FieldId::QuicHeaderForm, FieldId::QuicFirstByte, FieldId::QuicVersion,
+            FieldId::QuicFirstByte, FieldId::QuicVersion,
         ]
     } else if ip_version == 4 {
         vec![
@@ -511,7 +514,7 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::Ipv4Src, FieldId::Ipv4Dst,
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
-            FieldId::QuicHeaderForm, FieldId::QuicFirstByte, FieldId::QuicVersion,
+            FieldId::QuicFirstByte, FieldId::QuicVersion,
         ]
     } else {
         vec![]
@@ -896,4 +899,190 @@ mod tests {
         let result = parser.parse_field(FieldId::Ipv4Ver).unwrap();
         assert!(result.is_none());
     }
+
+    // =========================================================================
+    // QUIC header parsing tests
+    // =========================================================================
+
+    /// Creates an IPv6/UDP/QUIC Long Header packet (port 443, header form = 1)
+    fn create_ipv6_quic_long_header_packet() -> Vec<u8> {
+        // Ethernet header (14 bytes)
+        let mut packet = vec![
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
+            0x86, 0xDD,                          // EtherType (IPv6)
+        ];
+        
+        // IPv6 header (40 bytes)
+        let ipv6_header = vec![
+            0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
+            0x00, 0x15,             // Payload Length (21 bytes = 8 UDP + 13 QUIC)
+            0x11,                   // Next Header (UDP = 17)
+            0x40,                   // Hop Limit (64)
+            // Source: 2001:db8::1
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        packet.extend(ipv6_header);
+        
+        // UDP header (8 bytes) - destination port 443 (QUIC)
+        let udp_header = vec![
+            0x1F, 0x90, // Src Port: 8080
+            0x01, 0xBB, // Dst Port: 443 (QUIC)
+            0x00, 0x15, // Length: 21 bytes
+            0x00, 0x00, // Checksum
+        ];
+        packet.extend(udp_header);
+        
+        // QUIC Long Header (first byte + 4 byte version + more)
+        // First byte: 1xxxxxxx (header form = 1, long header)
+        let quic_header = vec![
+            0xC3,                   // Long header: 1100 0011 (form=1, fixed=1, type=00, reserved)
+            0x00, 0x00, 0x00, 0x01, // Version: 1 (QUIC version 1)
+            0x05,                   // DCID Length: 5
+            0x01, 0x02, 0x03, 0x04, 0x05, // DCID
+            0x00,                   // SCID Length: 0
+        ];
+        packet.extend(quic_header);
+        
+        packet
+    }
+
+    /// Creates an IPv6/UDP/QUIC Short Header packet (port 443, header form = 0)
+    fn create_ipv6_quic_short_header_packet() -> Vec<u8> {
+        // Ethernet header (14 bytes)
+        let mut packet = vec![
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
+            0x86, 0xDD,                          // EtherType (IPv6)
+        ];
+        
+        // IPv6 header (40 bytes)
+        let ipv6_header = vec![
+            0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
+            0x00, 0x10,             // Payload Length (16 bytes = 8 UDP + 8 QUIC)
+            0x11,                   // Next Header (UDP = 17)
+            0x40,                   // Hop Limit (64)
+            // Source: 2001:db8::1
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        packet.extend(ipv6_header);
+        
+        // UDP header (8 bytes) - source port 443 (QUIC)
+        let udp_header = vec![
+            0x01, 0xBB, // Src Port: 443 (QUIC)
+            0x1F, 0x90, // Dst Port: 8080
+            0x00, 0x10, // Length: 16 bytes
+            0x00, 0x00, // Checksum
+        ];
+        packet.extend(udp_header);
+        
+        // QUIC Short Header (first byte + DCID + packet number)
+        // First byte: 0xxxxxxx (header form = 0, short header)
+        let quic_header = vec![
+            0x43,                   // Short header: 0100 0011 (form=0, fixed=1, spin=0, etc.)
+            0x01, 0x02, 0x03, 0x04, 0x05, // DCID (connection ID)
+            0x00, 0x01,             // Packet number (simplified)
+        ];
+        packet.extend(quic_header);
+        
+        packet
+    }
+
+    #[test]
+    fn test_quic_long_header_first_byte() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
+        assert!(first_byte.is_some(), "Should have QUIC first byte");
+        
+        match first_byte.unwrap() {
+            FieldValue::U8(v) => {
+                assert_eq!(*v, 0xC3, "First byte should be 0xC3");
+                // Verify MSB (header form) is 1 for long header
+                assert_eq!((*v >> 7) & 0x01, 1, "MSB should be 1 for long header");
+            },
+            _ => panic!("Expected U8 for QUIC first byte"),
+        }
+    }
+
+    #[test]
+    fn test_quic_long_header_version() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let version = parser.parse_field(FieldId::QuicVersion).unwrap();
+        assert!(version.is_some(), "Long header should have version");
+        
+        match version.unwrap() {
+            FieldValue::U32(v) => assert_eq!(*v, 1, "Version should be 1"),
+            _ => panic!("Expected U32 for QUIC version"),
+        }
+    }
+
+    #[test]
+    fn test_quic_short_header_first_byte() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
+        assert!(first_byte.is_some(), "Should have QUIC first byte");
+        
+        match first_byte.unwrap() {
+            FieldValue::U8(v) => {
+                assert_eq!(*v, 0x43, "First byte should be 0x43");
+                // Verify MSB (header form) is 0 for short header
+                assert_eq!((*v >> 7) & 0x01, 0, "MSB should be 0 for short header");
+            },
+            _ => panic!("Expected U8 for QUIC first byte"),
+        }
+    }
+
+    #[test]
+    fn test_quic_short_header_no_version() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let version = parser.parse_field(FieldId::QuicVersion).unwrap();
+        assert!(version.is_none(), "Short header should NOT have version field");
+    }
+
+    #[test]
+    fn test_non_quic_udp_packet_no_quic_fields() {
+        // Standard UDP packet (port 8080, not 443/4433) should not parse QUIC fields
+        let packet = create_ipv6_udp_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
+        assert!(first_byte.is_none(), "Non-QUIC UDP packet should not have QUIC fields");
+        
+        let version = parser.parse_field(FieldId::QuicVersion).unwrap();
+        assert!(version.is_none(), "Non-QUIC UDP packet should not have QUIC version");
+    }
+
+    #[test]
+    fn test_quic_port_4433() {
+        // Create packet with port 4433 instead of 443
+        let mut packet = create_ipv6_quic_long_header_packet();
+        
+        // Modify destination port to 4433 (0x1151)
+        // UDP header starts at offset 14 (ethernet) + 40 (IPv6) = 54
+        // Destination port is at bytes 54+2 and 54+3
+        packet[56] = 0x11;
+        packet[57] = 0x51;
+        
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
+        assert!(first_byte.is_some(), "Port 4433 should be recognized as QUIC");
+    }
 }
+
