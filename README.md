@@ -3,11 +3,11 @@
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression.
+An *incomplete* Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression.
 
 ## Overview
 
-SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) such as LoRaWAN, Sigfox, and NB-IoT. This implementation provides:
+SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) such as LoRaWAN, CoAP. This implementation provides:
 
 - **Streaming Parse-Match-Compress Pipeline** - Fields are parsed on-demand during tree traversal, enabling early pruning when mismatches are detected
 - **Hierarchical Rule Tree** - Rules are organized in a tree structure for efficient O(log n) matching
@@ -265,6 +265,9 @@ Compression ratio:          13.71:1
 
 - [RFC 8724 - SCHC: Generic Framework for Static Context Header Compression and Fragmentation](https://www.rfc-editor.org/rfc/rfc8724)
 - [RFC 8824 - Static Context Header Compression (SCHC) for the Constrained Application Protocol (CoAP)](https://www.rfc-editor.org/rfc/rfc8824)
+- [RFC 9011 - Static Context Header Compression (SCHC) over LoRaWAN](https://www.rfc-editor.org/rfc/rfc9011)
+
+- 
 
 ## License
 
