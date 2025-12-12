@@ -1,0 +1,178 @@
+{
+  "fields": {
+    "IPV4.VER": {
+      "length": 4,
+      "unit": "bits",
+      "description": "IPv4 Version field"
+    },
+    "IPV6.VER": {
+      "length": 4,
+      "unit": "bits",
+      "description": "IPv6 Version field"
+    },
+    "IP.VER": {
+      "length": 4,
+      "unit": "bits",
+      "description": "IPv6 or IPv4 Version field"
+    },
+    "IPV6.TC": {
+      "length": 8,
+      "unit": "bits",
+      "description": "IPv6 Traffic Class field"
+    },
+    "IPV6.FL": {
+      "length": 20,
+      "unit": "bits",
+      "description": "IPv6 Flow Label field"
+    },
+    "IPV6.LEN": {
+      "length": 16,
+      "unit": "bits",
+      "description": "IPv6 Payload Length field",
+      "compute": "IPv6-length"
+    },
+    "IPV6.NXT": {
+      "length": 8,
+      "unit": "bits",
+      "description": "IPv6 Next Header field"
+    },
+    "IPV6.HOP_LMT": {
+      "length": 8,
+      "unit": "bits",
+      "description": "IPv6 Hop Limit field"
+    },
+    "IPV6.DEV_PREFIX": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Device Address Prefix (source for UP packets)"
+    },
+    "IPV6.DEV_IID": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Device Address Interface ID (source for UP packets)"
+    },
+    "IPV6.APP_PREFIX": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Application Address Prefix (destination for UP packets)"
+    },
+    "IPV6.APP_IID": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Application Address Interface ID (destination for UP packets)"
+    },
+    "ICMPV6.TYPE": {
+      "length": 8,
+      "unit": "bits",
+      "description": "ICMPv6 Type field"
+    },
+    "ICMPV6.CODE": {
+      "length": 8,
+      "unit": "bits",
+      "description": "ICMPv6 Code field"
+    },
+    "ICMPV6.CHECKSUM": {
+      "length": 16,
+      "unit": "bits",
+      "description": "ICMPv6 Checksum field",
+      "compute": "ICMPv6-checksum"
+    },
+    "ICMPV6.PAYLOAD": {
+      "length": 0,
+      "unit": "bits",
+      "description": "ICMPv6 Payload (variable length)"
+    },
+    "UDP.SRC_PORT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Source Port field"
+    },
+    "UDP.DST_PORT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Destination Port field"
+    },
+    "UDP.LEN": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Length field",
+      "compute": "UDP-length"
+    },
+    "UDP.CKSUM": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Checksum field",
+      "compute": "UDP-checksum"
+    },
+    "UDP.PAYLOAD": {
+      "length": 0,
+      "unit": "bits",
+      "description": "UDP Payload (variable length)"
+    },
+    "UDP.DEV_PORT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Device Port (source for UP packets)"
+    },
+    "UDP.APP_PORT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "UDP Application Port (destination for UP packets)"
+    },
+    "COAP.VER": {
+      "length": 2,
+      "unit": "bits",
+      "description": "CoAP Version field"
+    },
+    "COAP.TYPE": {
+      "length": 2,
+      "unit": "bits",
+      "description": "CoAP Type field (CON, NON, ACK, RST)"
+    },
+    "COAP.TKL": {
+      "length": 4,
+      "unit": "bits",
+      "description": "CoAP Token Length field (0-8 bytes)"
+    },
+    "COAP.CODE": {
+      "length": 8,
+      "unit": "bits",
+      "description": "CoAP Code field (method or response code)"
+    },
+    "COAP.MID": {
+      "length": 16,
+      "unit": "bits",
+      "description": "CoAP Message ID field"
+    },
+    "COAP.TOKEN": {
+      "length": "TKL",
+      "unit": "bits",
+      "description": "CoAP Token field (variable length, determined by TKL)"
+    },
+    "COAP.option": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Option (variable length, TLV format)"
+    },
+    "COAP.O-DELTA": {
+      "length": 4,
+      "unit": "bits",
+      "description": "CoAP Option Delta (option number relative encoding)"
+    },
+    "COAP.O-LENGTH": {
+      "length": 4,
+      "unit": "bits",
+      "description": "CoAP Option Length field"
+    },
+    "COAP.O-VALUE": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Option Value (variable length)"
+    },
+    "COAP.marker": {
+      "length": 8,
+      "unit": "bits",
+      "description": "CoAP End-of-Options Marker (0xFF)"
+    }
+  }
+}
