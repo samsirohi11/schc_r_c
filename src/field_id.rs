@@ -52,6 +52,15 @@ pub enum FieldId {
     UdpCksum,
     UdpDevPort,
     UdpAppPort,
+
+    // ===== QUIC Fields =====
+    /// QUIC header form bit (1 bit): 1 = long header, 0 = short header
+    QuicHeaderForm,
+    /// QUIC first byte (8 bits): Contains header form + type-specific bits
+    /// This should typically be kept as value-sent in compression rules
+    QuicFirstByte,
+    /// QUIC version field (32 bits, only present in long header)
+    QuicVersion,
 }
 
 impl FieldId {
@@ -96,6 +105,10 @@ impl FieldId {
             FieldId::UdpCksum => "UDP.CKSUM",
             FieldId::UdpDevPort => "UDP.DEV_PORT",
             FieldId::UdpAppPort => "UDP.APP_PORT",
+            // QUIC
+            FieldId::QuicHeaderForm => "QUIC.HEADER_FORM",
+            FieldId::QuicFirstByte => "QUIC.FIRST_BYTE",
+            FieldId::QuicVersion => "QUIC.VERSION",
         }
     }
 
@@ -133,6 +146,10 @@ impl FieldId {
             FieldId::UdpDevPort | FieldId::UdpAppPort => Some(16),
             FieldId::UdpLen => Some(16),
             FieldId::UdpCksum => Some(16),
+            // QUIC
+            FieldId::QuicHeaderForm => Some(1),
+            FieldId::QuicFirstByte => Some(8),
+            FieldId::QuicVersion => Some(32),
         }
     }
 }
@@ -197,6 +214,10 @@ impl FromStr for FieldId {
             "UDP.CKSUM" => Ok(FieldId::UdpCksum),
             "UDP.DEV_PORT" => Ok(FieldId::UdpDevPort),
             "UDP.APP_PORT" => Ok(FieldId::UdpAppPort),
+            // QUIC
+            "QUIC.HEADER_FORM" => Ok(FieldId::QuicHeaderForm),
+            "QUIC.FIRST_BYTE" => Ok(FieldId::QuicFirstByte),
+            "QUIC.VERSION" => Ok(FieldId::QuicVersion),
             _ => Err(ParseFieldIdError(s.to_string())),
         }
     }

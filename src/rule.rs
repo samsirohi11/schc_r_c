@@ -86,10 +86,25 @@ pub struct Field {
 
 impl Field {
     /// Parse target value and apply mo_val to MSB operator.
-    pub fn parse_tv(&mut self) {
+    /// Returns an error if MO.val exceeds the field length.
+    pub fn parse_tv(&mut self) -> crate::error::Result<()> {
         // Apply mo_val to MSB operator
         if let MatchingOperator::Msb(_) = self.mo {
-            self.mo = MatchingOperator::Msb(self.mo_val.unwrap_or(0));
+            let mo_val = self.mo_val.unwrap_or(0);
+            self.mo = MatchingOperator::Msb(mo_val);
+            
+            // Get the field length (either explicit FL or default from FieldId)
+            let field_length = self.fl
+                .or_else(|| self.fid.default_size_bits())
+                .unwrap_or(0);
+            
+            // Validate that MO.val doesn't exceed the field length
+            if mo_val as u16 > field_length {
+                return Err(crate::error::SchcError::RuleValidation(format!(
+                    "Field {}: MO.val ({}) exceeds field length ({} bits)",
+                    self.fid, mo_val, field_length
+                )));
+            }
         }
         
         self.parsed_tv = match (&self.mo, &self.tv) {
@@ -109,6 +124,8 @@ impl Field {
             },
             _ => None
         };
+        
+        Ok(())
     }
 
     /// Get field length in bits if specified
@@ -258,7 +275,7 @@ impl RuleSet {
             }
             
             for field in &mut rule.compression {
-                field.parse_tv();
+                field.parse_tv()?;
             }
         }
         Ok(RuleSet { rules })

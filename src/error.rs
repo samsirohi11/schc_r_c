@@ -18,6 +18,9 @@ pub enum SchcError {
     
     #[error("No matching rule found")]
     NoMatchingRule,
+    
+    #[error("Rule validation error: {0}")]
+    RuleValidation(String),
 }
 
 pub type Result<T> = std::result::Result<T, SchcError>;

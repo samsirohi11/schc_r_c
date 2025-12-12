@@ -224,6 +224,11 @@ impl<'a> StreamingParser<'a> {
                 };
                 self.extract_field(source_fid)
             }
+
+            // QUIC Fields
+            FieldId::QuicHeaderForm | FieldId::QuicFirstByte | FieldId::QuicVersion => {
+                self.extract_quic_field(fid)
+            }
         }
     }
 
@@ -372,6 +377,104 @@ impl<'a> StreamingParser<'a> {
         let udp_start = self.get_udp_start()?;
         Ok(udp_start + 8 - 14) // Subtract ethernet header (14 bytes) for actual IP+UDP header
     }
+
+    /// Get the QUIC header start offset (after UDP header)
+    /// Returns None if UDP ports don't indicate QUIC traffic
+    fn get_quic_start(&mut self) -> Result<Option<usize>> {
+        let udp_start = self.get_udp_start()?;
+        
+        // Check if this is QUIC traffic by examining UDP ports
+        // Reuse already-parsed UDP port fields instead of reading raw bytes again
+        // QUIC typically uses port 443 (HTTPS over QUIC) or 4433 (alternate QUIC port)
+        
+        // Parse UDP application port if not already cached
+        let app_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpAppPort) {
+            match val {
+                FieldValue::U16(p) => *p,
+                _ => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+
+        // Only parse QUIC if either port is 443 or 4433
+        if app_port != 443 && app_port != 4433 {
+            return Ok(None);
+        }
+        
+        Ok(Some(udp_start + 8)) // UDP header is 8 bytes
+    }
+
+    /// Extract QUIC header fields
+    /// 
+    /// QUIC is only parsed when UDP port is 443 or 4433.
+    /// 
+    /// QUIC header structure (RFC 9000):
+    /// - Long Header (first bit = 1):
+    ///   - First byte (8 bits): Header Form (1) + Fixed Bit + Long Packet Type + Type-Specific Bits
+    ///   - Version (32 bits)
+    ///   - ... (rest not parsed - DCID, SCID, etc.)
+    /// 
+    /// - Short Header (first bit = 0):
+    ///   - First byte (8 bits): Header Form (0) + Fixed Bit + Spin Bit + Reserved + Key Phase + PN Length
+    ///   - ... (no version field in short header)
+    /// 
+    /// Note: The first byte should be kept as-is (value-sent) in compression.
+    /// Only the version field is eligible for compression (not-sent) in long headers.
+     
+    fn extract_quic_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
+        let quic_start = match self.get_quic_start() {
+            Ok(Some(start)) => start,
+            Ok(None) => return Ok(None), // Not a QUIC packet (wrong ports)
+            Err(_) => return Ok(None), // Not a UDP packet
+        };
+
+        if quic_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        let quic_data = &self.raw[quic_start..];
+        if quic_data.is_empty() {
+            return Ok(None);
+        }
+
+        // First byte contains the header form bit (MSB)
+        let first_byte = quic_data[0];
+        let header_form = (first_byte >> 7) & 0x01; // Most significant bit: 1 = long, 0 = short
+        let is_long_header = header_form == 1;
+
+        match fid {
+            FieldId::QuicHeaderForm => {
+                // Return the header form bit (1 bit value, but stored as U8)
+                Ok(Some(FieldValue::U8(header_form)))
+            }
+            FieldId::QuicFirstByte => {
+                // Return the entire first byte (should be kept as value-sent)
+                Ok(Some(FieldValue::U8(first_byte)))
+            }
+            FieldId::QuicVersion => {
+                // Version field is only present in long headers (header form = 1)
+                if !is_long_header {
+                    // Short header has no version field
+                    return Ok(None);
+                }
+
+                // Version field starts at byte 1 and is 4 bytes
+                if quic_data.len() < 5 {
+                    return Ok(None);
+                }
+
+                let version = u32::from_be_bytes([
+                    quic_data[1],
+                    quic_data[2],
+                    quic_data[3],
+                    quic_data[4],
+                ]);
+                Ok(Some(FieldValue::U32(version)))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 // =============================================================================
@@ -397,6 +500,8 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::Ipv6SrcPrefix, FieldId::Ipv6SrcIid,
             FieldId::Ipv6DstPrefix, FieldId::Ipv6DstIid,
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
+            // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
+            FieldId::QuicHeaderForm, FieldId::QuicFirstByte, FieldId::QuicVersion,
         ]
     } else if ip_version == 4 {
         vec![
@@ -405,6 +510,8 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::Ipv4Ttl, FieldId::Ipv4Proto, FieldId::Ipv4Chksum,
             FieldId::Ipv4Src, FieldId::Ipv4Dst,
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
+            // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
+            FieldId::QuicHeaderForm, FieldId::QuicFirstByte, FieldId::QuicVersion,
         ]
     } else {
         vec![]

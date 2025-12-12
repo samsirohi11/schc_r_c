@@ -111,13 +111,7 @@
       {
         "FID": "IPV6.DEV_PREFIX",
         "FL": 64,
-        "TV": [
-          "2001:db8::/64",
-          "fe80::/64",
-          "2a01:cb08:8298:6000::/64",
-          "sdadsa",
-          "dsasamdam"
-        ],
+        "TV": ["2001:db8::/64", "fe80::/64", "2a01:cb08:8298:6000::/64"],
         "MO": "match-mapping",
         "CDA": "mapping-sent"
       },
@@ -176,9 +170,10 @@
       {
         "FID": "UDP.APP_PORT",
         "TV": 5680,
+        "FL": 16,
         "MO": "MSB",
         "CDA": "LSB",
-        "MO.val": 8
+        "MO.val": 14
       },
       { "FID": "UDP.LEN", "MO": "ignore", "CDA": "compute" },
       { "FID": "UDP.CKSUM", "MO": "ignore", "CDA": "compute" }
