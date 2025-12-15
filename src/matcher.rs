@@ -26,9 +26,14 @@ pub fn values_match(packet_value: &FieldValue, target_value: &RuleValue) -> bool
             let p_bytes = p_addr.octets();
             p_bytes.starts_with(t_prefix)
         }
-        (FieldValue::Ipv4(p_addr), RuleValue::Bytes(t_prefix)) => {
+        (FieldValue::Ipv4(p_addr), RuleValue::Bytes(t_bytes)) => {
             let p_bytes = p_addr.octets();
-            p_bytes.starts_with(t_prefix)
+            // Full address match (4 bytes) or prefix match
+            if t_bytes.len() == 4 {
+                p_bytes == t_bytes.as_slice()
+            } else {
+                p_bytes.starts_with(t_bytes)
+            }
         }
         _ => false,
     }

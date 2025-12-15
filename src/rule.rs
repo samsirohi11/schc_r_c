@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fs;
-use std::net::Ipv6Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::error::Result;
 use crate::field_id::FieldId;
 
@@ -19,7 +19,11 @@ impl RuleValue {
         match self {
             RuleValue::U64(n) => n.to_string(),
             RuleValue::Bytes(bytes) => {
-                if bytes.len() == 8 {
+                if bytes.len() == 4 {
+                    // IPv4 address - display as dotted decimal
+                    let addr = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
+                    addr.to_string()
+                } else if bytes.len() == 8 {
                     let mut addr_bytes = [0u8; 16];
                     addr_bytes[0..8].copy_from_slice(bytes);
                     let addr = Ipv6Addr::from(addr_bytes);
@@ -240,6 +244,13 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
                     let prefix_bytes_len = (prefix_len + 7) / 8;
                     let prefix_bytes: Vec<u8> = bytes[..prefix_bytes_len].to_vec();
                     Some(RuleValue::Bytes(prefix_bytes))
+                } else {
+                    Some(RuleValue::String(s.clone()))
+                }
+            } else if fid_str.starts_with("IPV4.SRC") || fid_str.starts_with("IPV4.DST") {
+                // Parse IPv4 addresses like "192.168.0.1" into bytes
+                if let Ok(addr) = s.parse::<Ipv4Addr>() {
+                    Some(RuleValue::Bytes(addr.octets().to_vec()))
                 } else {
                     Some(RuleValue::String(s.clone()))
                 }

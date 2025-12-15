@@ -100,5 +100,93 @@
         "CDA": "LSB"
       }
     ]
+  },
+  {
+    "RuleID": 12,
+    "RuleIDLength": 8,
+    "Comment": "IPv4 + UDP + QUIC Short Header",
+    "Compression": [
+      { "FID": "IPV4.VER", "TV": 4, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.IHL", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.DSCP", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.ECN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.LEN", "MO": "ignore", "CDA": "compute" },
+      { "FID": "IPV4.ID", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.FLAGS", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.FRAG_OFF", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.TTL", "TV": 64, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.PROTO", "TV": 17, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.CHKSUM", "MO": "ignore", "CDA": "compute" },
+      {
+        "FID": "IPV4.SRC",
+        "TV": ["192.168.0.2", "192.168.0.1"],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      {
+        "FID": "IPV4.DST",
+        "TV": ["192.168.0.2", "192.168.0.1"],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      { "FID": "UDP.DEV_PORT", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "UDP.APP_PORT", "TV": 443, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "UDP.LEN", "MO": "ignore", "CDA": "compute" },
+      { "FID": "UDP.CKSUM", "MO": "ignore", "CDA": "compute" },
+      {
+        "FID": "QUIC.FIRST_BYTE",
+        "TV": 0,
+        "MO": "MSB",
+        "MO.val": 1,
+        "CDA": "LSB"
+      }
+    ]
+  },
+  {
+    "RuleID": 13,
+    "RuleIDLength": 8,
+    "Comment": "IPv4 + UDP + QUIC Long Header",
+    "Compression": [
+      { "FID": "IPV4.VER", "TV": 4, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.IHL", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.DSCP", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.ECN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.LEN", "MO": "ignore", "CDA": "compute" },
+      { "FID": "IPV4.ID", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.FLAGS", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.FRAG_OFF", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "IPV4.TTL", "TV": 64, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.PROTO", "TV": 17, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV4.CHKSUM", "MO": "ignore", "CDA": "compute" },
+      {
+        "FID": "IPV4.SRC",
+        "TV": ["192.168.0.2", "192.168.0.1"],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      {
+        "FID": "IPV4.DST",
+        "TV": ["192.168.0.1", "192.168.0.2"],
+        "MO": "match-mapping",
+        "CDA": "mapping-sent"
+      },
+      { "FID": "UDP.DEV_PORT", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "UDP.APP_PORT", "TV": 443, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "UDP.LEN", "MO": "ignore", "CDA": "compute" },
+      { "FID": "UDP.CKSUM", "MO": "ignore", "CDA": "compute" },
+      {
+        "FID": "QUIC.FIRST_BYTE",
+        "TV": 128,
+        "MO": "MSB",
+        "MO.val": 1,
+        "CDA": "LSB"
+      },
+      {
+        "FID": "QUIC.VERSION",
+        "TV": 1,
+        "MO": "equal",
+        "CDA": "not-sent"
+      }
+    ]
   }
 ]

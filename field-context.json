@@ -5,6 +5,68 @@
       "unit": "bits",
       "description": "IPv4 Version field"
     },
+    "IPV4.IHL": {
+      "length": 4,
+      "unit": "bits",
+      "description": "IPv4 Internet Header Length (in 32-bit words)"
+    },
+    "IPV4.DSCP": {
+      "length": 6,
+      "unit": "bits",
+      "description": "IPv4 Differentiated Services Code Point"
+    },
+    "IPV4.ECN": {
+      "length": 2,
+      "unit": "bits",
+      "description": "IPv4 Explicit Congestion Notification"
+    },
+    "IPV4.LEN": {
+      "length": 16,
+      "unit": "bits",
+      "description": "IPv4 Total Length field",
+      "compute": "IPv4-length"
+    },
+    "IPV4.ID": {
+      "length": 16,
+      "unit": "bits",
+      "description": "IPv4 Identification field"
+    },
+    "IPV4.FLAGS": {
+      "length": 3,
+      "unit": "bits",
+      "description": "IPv4 Flags (Reserved, DF, MF)"
+    },
+    "IPV4.FRAG_OFF": {
+      "length": 13,
+      "unit": "bits",
+      "description": "IPv4 Fragment Offset"
+    },
+    "IPV4.TTL": {
+      "length": 8,
+      "unit": "bits",
+      "description": "IPv4 Time to Live"
+    },
+    "IPV4.PROTO": {
+      "length": 8,
+      "unit": "bits",
+      "description": "IPv4 Protocol field"
+    },
+    "IPV4.CHKSUM": {
+      "length": 16,
+      "unit": "bits",
+      "description": "IPv4 Header Checksum",
+      "compute": "IPv4-checksum"
+    },
+    "IPV4.SRC": {
+      "length": 32,
+      "unit": "bits",
+      "description": "IPv4 Source Address"
+    },
+    "IPV4.DST": {
+      "length": 32,
+      "unit": "bits",
+      "description": "IPv4 Destination Address"
+    },
     "IPV6.VER": {
       "length": 4,
       "unit": "bits",
