@@ -406,8 +406,11 @@ impl<'a> StreamingParser<'a> {
             return Ok(None);
         };
         
-        // Only parse QUIC if either port is 443 or 4433
-        if src_port != 443 && src_port != 4433 && dst_port != 443 && dst_port != 4433 {
+        // Only parse QUIC if either port is a known QUIC port
+        // 443 = HTTPS/QUIC, 4433 = alternate QUIC, 8080 = quinn-workbench default
+        const QUIC_PORTS: [u16; 3] = [443, 4433, 8080];
+        let is_quic = QUIC_PORTS.contains(&src_port) || QUIC_PORTS.contains(&dst_port);
+        if !is_quic {
             return Ok(None);
         }
         
