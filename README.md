@@ -15,12 +15,6 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 - **Modular Architecture** - Clean separation of parsing, matching, and compression logic
 - **Comprehensive Test Suite** - 97+ unit and integration tests
 
-### TODO:
-
-- [ ] Compute CDA
-- [ ] Decompression
-- [x] On the wire compression (live_compressor)
-
 ## Features
 
 ### Supported Protocols
