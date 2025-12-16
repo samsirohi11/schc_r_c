@@ -27,7 +27,7 @@ struct Args {
     rules: Option<String>,
     
     /// Path to the field context JSON file
-    #[arg(short = 'c', long)]
+    #[arg(short, long)]
     field_context: Option<String>,
     
     /// Enable debug mode (show field-by-field comparison)

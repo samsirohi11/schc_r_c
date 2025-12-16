@@ -1,7 +1,7 @@
 [
   {
-    "RuleID": 10,
-    "RuleIDLength": 8,
+    "RuleID": 0,
+    "RuleIDLength": 2,
     "Comment": "IPv6 + UDP + QUIC Long Header",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -54,8 +54,8 @@
     ]
   },
   {
-    "RuleID": 11,
-    "RuleIDLength": 8,
+    "RuleID": 1,
+    "RuleIDLength": 2,
     "Comment": "IPv6 + UDP + QUIC Short Header",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -102,8 +102,8 @@
     ]
   },
   {
-    "RuleID": 12,
-    "RuleIDLength": 8,
+    "RuleID": 4,
+    "RuleIDLength": 3,
     "Comment": "IPv4 + UDP + QUIC Short Header",
     "Compression": [
       { "FID": "IPV4.VER", "TV": 4, "MO": "equal", "CDA": "not-sent" },
@@ -143,8 +143,8 @@
     ]
   },
   {
-    "RuleID": 13,
-    "RuleIDLength": 8,
+    "RuleID": 5,
+    "RuleIDLength": 3,
     "Comment": "IPv4 + UDP + QUIC Long Header",
     "Compression": [
       { "FID": "IPV4.VER", "TV": 4, "MO": "equal", "CDA": "not-sent" },

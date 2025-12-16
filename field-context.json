@@ -166,11 +166,6 @@
       "description": "UDP Checksum field",
       "compute": "UDP-checksum"
     },
-    "UDP.PAYLOAD": {
-      "length": 0,
-      "unit": "bits",
-      "description": "UDP Payload (variable length)"
-    },
     "UDP.DEV_PORT": {
       "length": 16,
       "unit": "bits",

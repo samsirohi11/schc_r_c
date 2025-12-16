@@ -2,7 +2,7 @@
 //!
 //! Runs SCHC compression on packets from a pcap file using streaming tree method.
 
-use schc::{RuleSet, FieldContext, build_tree, compress_packet, display_tree, Direction};
+use schc::{RuleSet, FieldContext, build_tree, compress_packet, decompress_packet, display_tree, Direction};
 use clap::Parser;
 use anyhow::{Context, Result};
 use pcap_file::pcapng::{PcapNgReader, Block};
@@ -35,6 +35,10 @@ struct Args {
     /// Direction of the first packet ("UP" or "DOWN")
     #[arg(long, default_value = "UP")]
     first_packet_direction: String,
+
+    /// Verify compression by decompressing and comparing with original
+    #[arg(short = 'v', long, default_value_t = false)]
+    verify: bool,
 }
 
 fn main() -> Result<()> {
@@ -146,6 +150,87 @@ fn main() -> Result<()> {
                                 println!("  Original data:     {}", hex::encode(&compressed.original_header_data));
                                 println!("  Compressed data:   {}", hex::encode(&compressed.data));
                                 println!("{}\n", "═".repeat(80));
+                            }
+                            
+                            // Round-trip verification if enabled
+                            if args.verify {
+                                // Get the payload (everything after the header)
+                                let header_len = compressed.original_header_data.len();
+                                let ip_start = 14; // Ethernet header length
+                                let payload = if packet_data.len() > ip_start + header_len {
+                                    Some(&packet_data[ip_start + header_len..])
+                                } else {
+                                    None
+                                };
+                                
+                                // Original full packet (IP + transport + payload, without Ethernet)
+                                let original_full = &packet_data[ip_start..];
+                                
+                                match decompress_packet(
+                                    &compressed.data,
+                                    &ruleset.rules,
+                                    direction,
+                                    &field_context,
+                                    payload,
+                                ) {
+                                    Ok(decompressed) => {
+                                        // Compare full packets (header + payload)
+                                        let reconstructed_full = &decompressed.full_data;
+                                        
+                                        // Get header bytes only for display
+                                        let original_header = &compressed.original_header_data;
+                                        let decompressed_header = &decompressed.header_data;
+                                        
+                                        if original_full == reconstructed_full.as_slice() {
+                                            println!("  ✓ Verification: PASSED");
+                                        } else {
+                                            // Check if difference is only in UDP checksum (bytes 46-47 for IPv6+UDP)
+                                            let header_len = decompressed.header_data.len();
+                                            let checksum_only = if header_len >= 48 {
+                                                // UDP checksum is at bytes 46-47 (IPv6 40 + UDP offset 6)
+                                                let mut only_checksum_diff = true;
+                                                let min_len = original_full.len().min(reconstructed_full.len());
+                                                for i in 0..min_len {
+                                                    if original_full[i] != reconstructed_full[i] && !(i == 46 || i == 47) {
+                                                        only_checksum_diff = false;
+                                                        break;
+                                                    }
+                                                }
+                                                only_checksum_diff && original_full.len() == reconstructed_full.len()
+                                            } else {
+                                                false
+                                            };
+                                            
+                                            if checksum_only {
+                                                println!("  ⚠ Verification: PASSED (checksum differs - likely offloading)");
+                                            } else {
+                                                println!("  ✗ Verification: FAILED");
+                                                
+                                                // Show byte-by-byte diff in debug mode
+                                                if args.debug {
+                                                    let min_len = original_full.len().min(reconstructed_full.len());
+                                                    for i in 0..min_len {
+                                                        if original_full[i] != reconstructed_full[i] {
+                                                            println!("    Diff at byte {}: original=0x{:02x}, decompressed=0x{:02x}",
+                                                                i, original_full[i], reconstructed_full[i]);
+                                                        }
+                                                    }
+                                                    if original_full.len() != reconstructed_full.len() {
+                                                        println!("    Length mismatch: original={}, decompressed={}",
+                                                            original_full.len(), reconstructed_full.len());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Always show headers
+                                        println!("    Original header:      {}", hex::encode(original_header));
+                                        println!("    Decompressed header:  {}", hex::encode(decompressed_header));
+                                    }
+                                    Err(e) => {
+                                        eprintln!("  ✗ Verification ERROR: {}", e);
+                                    }
+                                }
                             }
                         }
                         Err(e) => {

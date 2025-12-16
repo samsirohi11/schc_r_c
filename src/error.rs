@@ -16,6 +16,9 @@ pub enum SchcError {
     #[error("Compression error: {0}")]
     Compression(String),
     
+    #[error("Decompression error: {0}")]
+    Decompression(String),
+    
     #[error("No matching rule found")]
     NoMatchingRule,
     

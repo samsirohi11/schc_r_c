@@ -1,25 +1,15 @@
 [
   {
-    "RuleID": 40,
-    "RuleIDLength": 8,
+    "RuleID": 0,
+    "RuleIDLength": 2,
     "Comment": "IPv4 only",
     "Compression": [
       { "FID": "IPV4.VER", "TV": 4, "MO": "equal", "CDA": "not-sent" }
     ]
   },
   {
-    "RuleID": 50,
-    "RuleIDLength": 8,
-    "Comment": "IPv6 only",
-    "Compression": [
-      { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
-      { "FID": "IPV6.TC", "TV": 1, "MO": "equal", "CDA": "not-sent" },
-      { "FID": "IPV6.FL", "MO": "ignore", "CDA": "value-sent" }
-    ]
-  },
-  {
-    "RuleID": 60,
-    "RuleIDLength": 8,
+    "RuleID": 1,
+    "RuleIDLength": 2,
     "Comment": "IPv6 only",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -28,8 +18,8 @@
     ]
   },
   {
-    "RuleID": 61,
-    "RuleIDLength": 8,
+    "RuleID": 4,
+    "RuleIDLength": 3,
     "Comment": "IPv6 only",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -60,8 +50,8 @@
     ]
   },
   {
-    "RuleID": 62,
-    "RuleIDLength": 8,
+    "RuleID": 5,
+    "RuleIDLength": 3,
     "Comment": "IPv6 only",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -93,8 +83,8 @@
     ]
   },
   {
-    "RuleID": 63,
-    "RuleIDLength": 8,
+    "RuleID": 12,
+    "RuleIDLength": 4,
     "Comment": "IPv6 and UDP",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -136,8 +126,8 @@
     ]
   },
   {
-    "RuleID": 64,
-    "RuleIDLength": 8,
+    "RuleID": 13,
+    "RuleIDLength": 4,
     "Comment": "IPv6 and UDP",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },
@@ -180,8 +170,8 @@
     ]
   },
   {
-    "RuleID": 70,
-    "RuleIDLength": 8,
+    "RuleID": 14,
+    "RuleIDLength": 4,
     "Comment": "IPv6 + ICMPv6 Echo Request/Reply (ping6)",
     "Compression": [
       { "FID": "IPV6.VER", "TV": 6, "MO": "equal", "CDA": "not-sent" },

@@ -9,6 +9,8 @@ pub mod rule;
 pub mod parser;
 pub mod matcher;
 pub mod compressor;
+pub mod decompressor;
+pub mod packet_builder;
 pub mod tree;
 pub mod tree_display;
 
@@ -32,3 +34,7 @@ pub use streaming_tree::{
     CompressedPacket,
     FieldValue,
 };
+
+// Re-export decompression types
+pub use decompressor::{decompress_packet, match_rule_id, DecompressedPacket};
+pub use packet_builder::{build_headers, ReconstructedHeaders};
