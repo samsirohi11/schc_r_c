@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-An *incomplete* Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression.
+An _incomplete_ Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression.
 
 ## Overview
 
@@ -19,8 +19,7 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 
 - [ ] Compute CDA
 - [ ] Decompression
-- [ ] On the wire compression/decompression
-- [ ] support for QUIC
+- [x] On the wire compression (live_compressor)
 
 ## Features
 
@@ -31,6 +30,7 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 | **IPv4** | Version, IHL, DSCP, ECN, Length, ID, Flags, Fragment Offset, TTL, Protocol, Checksum, Source, Destination              |
 | **IPv6** | Version, Traffic Class, Flow Label, Payload Length, Next Header, Hop Limit, Source/Destination (with Prefix/IID split) |
 | **UDP**  | Source Port, Destination Port, Length, Checksum                                                                        |
+| **QUIC** | Header Form, Fixed Bit, Long/Short Packet Type, Version                                                                |
 
 ### Matching Operators (MO)
 
@@ -108,6 +108,37 @@ cargo run --release --bin tree_builder -- \
     --rules test-rule.json \
     --field-context field-context.json
 ```
+
+#### Live Capture and Compress
+
+Capture packets from a live network interface and analyze compression in real-time:
+
+```bash
+# List available network interfaces
+cargo run --release --bin live_compressor -- --list-interfaces
+
+# Capture and compress packets from an interface
+cargo run --release --bin live_compressor -- \
+    --interface eth0 \
+    --rules rules.json \
+    --field-context field-context.json \
+    --debug
+```
+
+**Options:**
+
+- `-i, --interface <NAME>` - Network interface to capture from
+- `--list-interfaces` - List available network interfaces
+- `-r, --rules <PATH>` - Path to rules JSON file
+- `-c, --field-context <PATH>` - Path to field context JSON
+- `-d, --debug` - Enable verbose debug output
+- `-m, --max-packets <N>` - Limit number of packets to process (0 = unlimited)
+
+**Notes:**
+
+- Requires elevated privileges (Administrator/sudo) to capture packets
+- Automatically detects packet direction based on MAC address
+- Press `Ctrl+C` to stop capture and show summary statistics
 
 ### Library API
 
@@ -213,8 +244,9 @@ src/
 ├── tree_display.rs     # Tree visualization
 ├── streaming_tree.rs   # Integration layer
 └── bin/
-    ├── compressor.rs   # CLI compression tool
-    └── tree_builder.rs # Tree visualization tool
+    ├── compressor.rs      # CLI compression tool (pcap files)
+    ├── live_compressor.rs # Live interface packet capture
+    └── tree_builder.rs    # Tree visualization tool
 ```
 
 ## Testing
@@ -267,7 +299,7 @@ Compression ratio:          13.71:1
 - [RFC 8824 - Static Context Header Compression (SCHC) for the Constrained Application Protocol (CoAP)](https://www.rfc-editor.org/rfc/rfc8824)
 - [RFC 9011 - Static Context Header Compression (SCHC) over LoRaWAN](https://www.rfc-editor.org/rfc/rfc9011)
 
-- 
+-
 
 ## License
 
