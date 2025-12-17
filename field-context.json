@@ -67,6 +67,16 @@
       "unit": "bits",
       "description": "IPv4 Destination Address"
     },
+    "IPV4.DEV": {
+      "length": 32,
+      "unit": "bits",
+      "description": "IPv4 Device Address"
+    },
+    "IPV4.APP": {
+      "length": 32,
+      "unit": "bits",
+      "description": "IPv4 Application Address"
+    },
     "IPV6.VER": {
       "length": 4,
       "unit": "bits",

@@ -26,6 +26,8 @@ pub enum FieldId {
     Ipv4Chksum,
     Ipv4Src,
     Ipv4Dst,
+    Ipv4Dev,
+    Ipv4App,
 
     // ===== IPv6 Fields =====
     Ipv6Ver,
@@ -78,6 +80,8 @@ impl FieldId {
             FieldId::Ipv4Chksum => "IPV4.CHKSUM",
             FieldId::Ipv4Src => "IPV4.SRC",
             FieldId::Ipv4Dst => "IPV4.DST",
+            FieldId::Ipv4Dev => "IPV4.DEV",
+            FieldId::Ipv4App => "IPV4.APP",
             // IPv6
             FieldId::Ipv6Ver => "IPV6.VER",
             FieldId::Ipv6Tc => "IPV6.TC",
@@ -123,8 +127,8 @@ impl FieldId {
             FieldId::Ipv4Ttl => Some(8),
             FieldId::Ipv4Proto => Some(8),
             FieldId::Ipv4Chksum => Some(16),
-            FieldId::Ipv4Src => Some(32),
-            FieldId::Ipv4Dst => Some(32),
+            FieldId::Ipv4Src | FieldId::Ipv4Dst |
+            FieldId::Ipv4Dev | FieldId::Ipv4App => Some(32),
             // IPv6
             FieldId::Ipv6Ver => Some(4),
             FieldId::Ipv6Tc => Some(8),
@@ -185,6 +189,8 @@ impl FromStr for FieldId {
             "IPV4.CHKSUM" => Ok(FieldId::Ipv4Chksum),
             "IPV4.SRC" => Ok(FieldId::Ipv4Src),
             "IPV4.DST" => Ok(FieldId::Ipv4Dst),
+            "IPV4.DEV" => Ok(FieldId::Ipv4Dev),
+            "IPV4.APP" => Ok(FieldId::Ipv4App),
             // IPv6
             "IPV6.VER" => Ok(FieldId::Ipv6Ver),
             "IPV6.TC" => Ok(FieldId::Ipv6Tc),

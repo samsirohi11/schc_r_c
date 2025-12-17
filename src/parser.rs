@@ -179,6 +179,20 @@ impl<'a> StreamingParser<'a> {
                 self.extract_ipv4_field(ip_data, fid)
             }
 
+            // Direction-based IPv4 addresses
+            FieldId::Ipv4Dev | FieldId::Ipv4App => {
+                if self.layer != ProtocolLayer::Ipv4 {
+                    return Ok(None);
+                }
+                let is_dev = matches!(fid, FieldId::Ipv4Dev);
+                let source_fid = if self.get_directional_source(is_dev) {
+                    FieldId::Ipv4Src
+                } else {
+                    FieldId::Ipv4Dst
+                };
+                self.extract_field(source_fid)
+            }
+
             // IPv6 Fields
             FieldId::Ipv6Ver | FieldId::Ipv6Tc | FieldId::Ipv6Fl | FieldId::Ipv6Len |
             FieldId::Ipv6Nxt | FieldId::Ipv6HopLmt | FieldId::Ipv6Src | FieldId::Ipv6Dst |

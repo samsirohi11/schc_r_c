@@ -319,7 +319,7 @@ fn read_field_value(
     
     // Check if this is an address field that needs bytes
     let is_address = matches!(fid, 
-        FieldId::Ipv4Src | FieldId::Ipv4Dst |
+        FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App |
         FieldId::Ipv6Src | FieldId::Ipv6Dst |
         FieldId::Ipv6SrcPrefix | FieldId::Ipv6DstPrefix |
         FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix |
@@ -344,7 +344,7 @@ fn read_field_value(
         
         // Convert to appropriate type
         match fid {
-            FieldId::Ipv4Src | FieldId::Ipv4Dst if bytes.len() == 4 => {
+            FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App if bytes.len() == 4 => {
                 Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
                     bytes[0], bytes[1], bytes[2], bytes[3]
                 )))
@@ -398,7 +398,7 @@ fn rule_value_to_field_value(rv: &RuleValue, fid: FieldId) -> Result<FieldValue>
         }
         RuleValue::Bytes(bytes) => {
             match fid {
-                FieldId::Ipv4Src | FieldId::Ipv4Dst if bytes.len() == 4 => {
+                FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App if bytes.len() == 4 => {
                     Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
                         bytes[0], bytes[1], bytes[2], bytes[3]
                     )))

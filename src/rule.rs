@@ -247,7 +247,8 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
                 } else {
                     Some(RuleValue::String(s.clone()))
                 }
-            } else if fid_str.starts_with("IPV4.SRC") || fid_str.starts_with("IPV4.DST") {
+            } else if fid_str.starts_with("IPV4.SRC") || fid_str.starts_with("IPV4.DST") ||
+                      fid_str.starts_with("IPV4.DEV") || fid_str.starts_with("IPV4.APP") {
                 // Parse IPv4 addresses like "192.168.0.1" into bytes
                 if let Ok(addr) = s.parse::<Ipv4Addr>() {
                     Some(RuleValue::Bytes(addr.octets().to_vec()))

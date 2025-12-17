@@ -118,16 +118,16 @@
       { "FID": "IPV4.PROTO", "TV": 17, "MO": "equal", "CDA": "not-sent" },
       { "FID": "IPV4.CHKSUM", "MO": "ignore", "CDA": "compute" },
       {
-        "FID": "IPV4.SRC",
-        "TV": ["192.168.40.1", "192.168.41.2"],
-        "MO": "match-mapping",
-        "CDA": "mapping-sent"
+        "FID": "IPV4.DEV",
+        "TV": "192.168.40.1",
+        "MO": "equal",
+        "CDA": "not-sent"
       },
       {
-        "FID": "IPV4.DST",
-        "TV": ["192.168.40.1", "192.168.41.2"],
-        "MO": "match-mapping",
-        "CDA": "mapping-sent"
+        "FID": "IPV4.APP",
+        "TV": "192.168.41.2",
+        "MO": "equal",
+        "CDA": "not-sent"
       },
       { "FID": "UDP.DEV_PORT", "MO": "ignore", "CDA": "value-sent" },
       { "FID": "UDP.APP_PORT", "TV": 8080, "MO": "equal", "CDA": "not-sent" },
@@ -159,16 +159,16 @@
       { "FID": "IPV4.PROTO", "TV": 17, "MO": "equal", "CDA": "not-sent" },
       { "FID": "IPV4.CHKSUM", "MO": "ignore", "CDA": "compute" },
       {
-        "FID": "IPV4.SRC",
-        "TV": ["192.168.40.1", "192.168.41.2"],
-        "MO": "match-mapping",
-        "CDA": "mapping-sent"
+        "FID": "IPV4.DEV",
+        "TV": "192.168.40.1",
+        "MO": "equal",
+        "CDA": "not-sent"
       },
       {
-        "FID": "IPV4.DST",
-        "TV": ["192.168.40.1", "192.168.41.2"],
-        "MO": "match-mapping",
-        "CDA": "mapping-sent"
+        "FID": "IPV4.APP",
+        "TV": "192.168.41.2",
+        "MO": "equal",
+        "CDA": "not-sent"
       },
       { "FID": "UDP.DEV_PORT", "MO": "ignore", "CDA": "value-sent" },
       { "FID": "UDP.APP_PORT", "TV": 8080, "MO": "equal", "CDA": "not-sent" },
