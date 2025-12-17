@@ -133,79 +133,6 @@ cargo run --release --bin live_compressor -- \
 - Automatically detects packet direction based on MAC address
 - Press `Ctrl+C` to stop capture and show summary statistics
 
-### Library API
-
-#### Compression
-
-```rust
-use schc::{
-    RuleSet, FieldContext, build_tree, compress_packet, Direction
-};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load rules
-    let ruleset = RuleSet::from_file("rules.json")?;
-    let field_context = FieldContext::default();
-
-    // Build compression tree
-    let tree = build_tree(&ruleset.rules, &field_context);
-
-    // Compress a packet
-    let packet_data: &[u8] = &[/* raw ethernet frame */];
-    let result = compress_packet(
-        &tree,
-        packet_data,
-        Direction::Up,
-        &ruleset.rules,
-        &field_context,
-        false, // debug mode
-    )?;
-
-    println!("Compressed {} bits -> {} bits (saved {} bits)",
-        result.original_header_bits,
-        result.compressed_header_bits,
-        result.savings_bits());
-
-    Ok(())
-}
-```
-
-#### Decompression
-
-The decompression API reconstructs original packet headers from compressed SCHC data using the same rule set.
-
-```rust
-use schc::{
-    RuleSet, FieldContext, decompress_packet, Direction
-};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load rules (same rules used for compression)
-    let ruleset = RuleSet::from_file("rules.json")?;
-    let field_context = FieldContext::from_file("field-context.json")?;
-
-    // Compressed SCHC data (rule ID + residues + payload)
-    let compressed_data: &[u8] = &[/* SCHC compressed packet */];
-
-    // Decompress the packet
-    let result = decompress_packet(
-        compressed_data,
-        &ruleset.rules,
-        Direction::Up,  // Same direction as compression
-        &field_context,
-        None,  // Payload extracted from compressed_data
-    )?;
-
-    println!("Decompressed using rule {}/{}",
-        result.rule_id, result.rule_id_length);
-    println!("Consumed {} bits from compressed data", result.bits_consumed);
-    println!("Reconstructed header: {} bytes", result.header_data.len());
-    println!("Full packet: {} bytes", result.full_data.len());
-
-    Ok(())
-}
-```
-
 #### Decompression Data Flow
 
 The decompression process follows these steps:
@@ -330,27 +257,6 @@ src/
 | `packet_builder.rs` | Constructs proper protocol headers with correct byte ordering, computes checksums, calculates lengths  |
 | `streaming_tree.rs` | Unified compression pipeline that parses fields on-demand during tree traversal                        |
 | `parser.rs`         | Zero-copy packet parsing supporting Ethernet, IPv4, IPv6, UDP, and QUIC headers                        |
-
-## Testing
-
-Run the comprehensive test suite:
-
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Run specific module tests
-cargo test parser::tests
-cargo test matcher::tests
-cargo test compressor::tests
-cargo test tree::tests
-
-# Run integration tests
-cargo test --test integration_tests
-```
 
 ## Example Output
 
