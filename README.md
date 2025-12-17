@@ -3,17 +3,16 @@
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-An _incomplete_ Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression.
+A Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression and decompression.
 
 ## Overview
 
-SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) such as LoRaWAN, CoAP. This implementation provides:
+SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) and constrained links. This implementation provides:
 
+- **Bidirectional Support** - Compression and decompression with direction-aware rules
 - **Streaming Parse-Match-Compress Pipeline** - Fields are parsed on-demand during tree traversal, enabling early pruning when mismatches are detected
 - **Hierarchical Rule Tree** - Rules are organized in a tree structure for efficient O(log n) matching
-- **Zero-Copy Design** - Minimal memory allocations during compression
-- **Modular Architecture** - Clean separation of parsing, matching, and compression logic
-- **Comprehensive Test Suite** - 97+ unit and integration tests
+- **Header Reconstruction** - Decompression rebuilds complete protocol headers with checksums
 
 ## Features
 
@@ -136,6 +135,8 @@ cargo run --release --bin live_compressor -- \
 
 ### Library API
 
+#### Compression
+
 ```rust
 use schc::{
     RuleSet, FieldContext, build_tree, compress_packet, Direction
@@ -167,6 +168,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+#### Decompression
+
+The decompression API reconstructs original packet headers from compressed SCHC data using the same rule set.
+
+```rust
+use schc::{
+    RuleSet, FieldContext, decompress_packet, Direction
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load rules (same rules used for compression)
+    let ruleset = RuleSet::from_file("rules.json")?;
+    let field_context = FieldContext::from_file("field-context.json")?;
+
+    // Compressed SCHC data (rule ID + residues + payload)
+    let compressed_data: &[u8] = &[/* SCHC compressed packet */];
+
+    // Decompress the packet
+    let result = decompress_packet(
+        compressed_data,
+        &ruleset.rules,
+        Direction::Up,  // Same direction as compression
+        &field_context,
+        None,  // Payload extracted from compressed_data
+    )?;
+
+    println!("Decompressed using rule {}/{}",
+        result.rule_id, result.rule_id_length);
+    println!("Consumed {} bits from compressed data", result.bits_consumed);
+    println!("Reconstructed header: {} bytes", result.header_data.len());
+    println!("Full packet: {} bytes", result.full_data.len());
+
+    Ok(())
+}
+```
+
+#### Decompression Data Flow
+
+The decompression process follows these steps:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          DECOMPRESSION PIPELINE                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Compressed Data                                                           │
+│   [Rule ID | Residues | Payload]                                            │
+│        │                                                                    │
+│        ▼                                                                    │
+│   1. match_rule_id()                                                        │
+│      ├─ Variable-length rule ID matching                                    │
+│      ├─ Rules checked in decreasing rule_id_length order                    │
+│      └─ Returns matching Rule structure                                     │
+│        │                                                                    │
+│        ▼                                                                    │
+│   2. decompress_field() for each field in rule                              │
+│      ├─ not-sent:      Restore value from Target Value (TV)                 │
+│      ├─ value-sent:    Read full value from residue bits                    │
+│      ├─ mapping-sent:  Read index, lookup in TV mapping array               │
+│      ├─ LSB:           Combine MSB from TV + LSB from residue               │
+│      └─ compute:       Mark for computation (checksum, length)              │
+│        │                                                                    │
+│        ▼                                                                    │
+│   3. build_headers()                                                        │
+│      ├─ Determine protocol stack (IPv4/IPv6, UDP, QUIC)                     │
+│      ├─ Build headers in order with proper byte alignment                   │
+│      ├─ Compute checksums (IPv4 header, UDP pseudo-header)                  │
+│      └─ Calculate lengths (IP total length, UDP length)                     │
+│        │                                                                    │
+│        ▼                                                                    │
+│   Reconstructed Packet                                                      │
+│   [IP Header | UDP Header | QUIC Header | Payload]                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Rule Format
@@ -228,20 +305,31 @@ The codebase is organized into focused modules:
 src/
 ├── lib.rs              # Public API exports
 ├── error.rs            # Error types
-├── field_id.rs         # Protocol field identifiers
-├── field_context.rs    # Field definitions
+├── field_id.rs         # Protocol field identifiers (enum-based for performance)
+├── field_context.rs    # Field definitions and size lookups
 ├── rule.rs             # Rule parsing and structures
 ├── parser.rs           # Streaming packet parser
-├── matcher.rs          # Value matching functions
+├── matcher.rs          # Matching operators (equal, ignore, MSB, match-mapping)
 ├── compressor.rs       # Compression actions (CDAs)
+├── decompressor.rs     # Decompression logic (rule ID matching, field restoration)
+├── packet_builder.rs   # Header reconstruction
 ├── tree.rs             # Rule tree structures
 ├── tree_display.rs     # Tree visualization
-├── streaming_tree.rs   # Integration layer
+├── streaming_tree.rs   # Integration layer (unified parse+match+compress)
 └── bin/
     ├── compressor.rs      # CLI compression tool (pcap files)
     ├── live_compressor.rs # Live interface packet capture
     └── tree_builder.rs    # Tree visualization tool
 ```
+
+### Module Responsibilities
+
+| Module              | Purpose                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `decompressor.rs`   | Matches rule IDs with variable-length encoding, restores field values from residues using inverse CDAs |
+| `packet_builder.rs` | Constructs proper protocol headers with correct byte ordering, computes checksums, calculates lengths  |
+| `streaming_tree.rs` | Unified compression pipeline that parses fields on-demand during tree traversal                        |
+| `parser.rs`         | Zero-copy packet parsing supporting Ethernet, IPv4, IPv6, UDP, and QUIC headers                        |
 
 ## Testing
 
@@ -292,8 +380,6 @@ Compression ratio:          13.71:1
 - [RFC 8724 - SCHC: Generic Framework for Static Context Header Compression and Fragmentation](https://www.rfc-editor.org/rfc/rfc8724)
 - [RFC 8824 - Static Context Header Compression (SCHC) for the Constrained Application Protocol (CoAP)](https://www.rfc-editor.org/rfc/rfc8824)
 - [RFC 9011 - Static Context Header Compression (SCHC) over LoRaWAN](https://www.rfc-editor.org/rfc/rfc9011)
-
--
 
 ## License
 
