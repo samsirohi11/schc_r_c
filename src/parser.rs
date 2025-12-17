@@ -243,6 +243,9 @@ impl<'a> StreamingParser<'a> {
             FieldId::QuicFirstByte | FieldId::QuicVersion => {
                 self.extract_quic_field(fid)
             }
+
+            // Unsupported fields (COAP, ICMPv6, IP.VER, etc.) - generated from JSON but not yet implemented
+            _ => Ok(None)
         }
     }
 

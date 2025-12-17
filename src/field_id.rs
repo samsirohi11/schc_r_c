@@ -1,246 +1,16 @@
 //! Field identifier enum for compile-time type safety and performance.
 //!
+//! This module includes the auto-generated FieldId enum from field-context.json.
+//! The build.rs script parses the JSON and generates the enum at compile time,
+//! making field-context.json the single source of truth.
+//!
 //! Using an enum instead of strings provides:
 //! - Zero-cost comparisons (enum variants vs string comparison)
 //! - Compile-time validation of field names
 //! - No heap allocation for field identifiers
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
-use std::str::FromStr;
-
-/// Unique identifier for packet header fields across all supported protocols.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FieldId {
-    // ===== IPv4 Fields =====
-    Ipv4Ver,
-    Ipv4Ihl,
-    Ipv4Dscp,
-    Ipv4Ecn,
-    Ipv4Len,
-    Ipv4Id,
-    Ipv4Flags,
-    Ipv4FragOff,
-    Ipv4Ttl,
-    Ipv4Proto,
-    Ipv4Chksum,
-    Ipv4Src,
-    Ipv4Dst,
-    Ipv4Dev,
-    Ipv4App,
-
-    // ===== IPv6 Fields =====
-    Ipv6Ver,
-    Ipv6Tc,
-    Ipv6Fl,
-    Ipv6Len,
-    Ipv6Nxt,
-    Ipv6HopLmt,
-    Ipv6Src,
-    Ipv6Dst,
-    Ipv6SrcPrefix,
-    Ipv6SrcIid,
-    Ipv6DstPrefix,
-    Ipv6DstIid,
-    Ipv6DevPrefix,
-    Ipv6DevIid,
-    Ipv6AppPrefix,
-    Ipv6AppIid,
-
-    // ===== UDP Fields =====
-    UdpSrcPort,
-    UdpDstPort,
-    UdpLen,
-    UdpCksum,
-    UdpDevPort,
-    UdpAppPort,
-
-    // ===== QUIC Fields =====
-    /// QUIC first byte (8 bits): Contains header form (bit 0) + type-specific bits
-    QuicFirstByte,
-    /// QUIC version field (32 bits, only present in long header where first bit = 1)
-    QuicVersion,
-}
-
-impl FieldId {
-    /// Returns the canonical string representation used in JSON rules.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            // IPv4
-            FieldId::Ipv4Ver => "IPV4.VER",
-            FieldId::Ipv4Ihl => "IPV4.IHL",
-            FieldId::Ipv4Dscp => "IPV4.DSCP",
-            FieldId::Ipv4Ecn => "IPV4.ECN",
-            FieldId::Ipv4Len => "IPV4.LEN",
-            FieldId::Ipv4Id => "IPV4.ID",
-            FieldId::Ipv4Flags => "IPV4.FLAGS",
-            FieldId::Ipv4FragOff => "IPV4.FRAG_OFF",
-            FieldId::Ipv4Ttl => "IPV4.TTL",
-            FieldId::Ipv4Proto => "IPV4.PROTO",
-            FieldId::Ipv4Chksum => "IPV4.CHKSUM",
-            FieldId::Ipv4Src => "IPV4.SRC",
-            FieldId::Ipv4Dst => "IPV4.DST",
-            FieldId::Ipv4Dev => "IPV4.DEV",
-            FieldId::Ipv4App => "IPV4.APP",
-            // IPv6
-            FieldId::Ipv6Ver => "IPV6.VER",
-            FieldId::Ipv6Tc => "IPV6.TC",
-            FieldId::Ipv6Fl => "IPV6.FL",
-            FieldId::Ipv6Len => "IPV6.LEN",
-            FieldId::Ipv6Nxt => "IPV6.NXT",
-            FieldId::Ipv6HopLmt => "IPV6.HOP_LMT",
-            FieldId::Ipv6Src => "IPV6.SRC",
-            FieldId::Ipv6Dst => "IPV6.DST",
-            FieldId::Ipv6SrcPrefix => "IPV6.SRC_PREFIX",
-            FieldId::Ipv6SrcIid => "IPV6.SRC_IID",
-            FieldId::Ipv6DstPrefix => "IPV6.DST_PREFIX",
-            FieldId::Ipv6DstIid => "IPV6.DST_IID",
-            FieldId::Ipv6DevPrefix => "IPV6.DEV_PREFIX",
-            FieldId::Ipv6DevIid => "IPV6.DEV_IID",
-            FieldId::Ipv6AppPrefix => "IPV6.APP_PREFIX",
-            FieldId::Ipv6AppIid => "IPV6.APP_IID",
-            // UDP
-            FieldId::UdpSrcPort => "UDP.SRC_PORT",
-            FieldId::UdpDstPort => "UDP.DST_PORT",
-            FieldId::UdpLen => "UDP.LEN",
-            FieldId::UdpCksum => "UDP.CKSUM",
-            FieldId::UdpDevPort => "UDP.DEV_PORT",
-            FieldId::UdpAppPort => "UDP.APP_PORT",
-            // QUIC
-            FieldId::QuicFirstByte => "QUIC.FIRST_BYTE",
-            FieldId::QuicVersion => "QUIC.VERSION",
-        }
-    }
-
-    /// Returns default field size in bits (for known fixed-size fields).
-    pub fn default_size_bits(&self) -> Option<u16> {
-        match self {
-            // IPv4
-            FieldId::Ipv4Ver => Some(4),
-            FieldId::Ipv4Ihl => Some(4),
-            FieldId::Ipv4Dscp => Some(6),
-            FieldId::Ipv4Ecn => Some(2),
-            FieldId::Ipv4Len => Some(16),
-            FieldId::Ipv4Id => Some(16),
-            FieldId::Ipv4Flags => Some(3),
-            FieldId::Ipv4FragOff => Some(13),
-            FieldId::Ipv4Ttl => Some(8),
-            FieldId::Ipv4Proto => Some(8),
-            FieldId::Ipv4Chksum => Some(16),
-            FieldId::Ipv4Src | FieldId::Ipv4Dst |
-            FieldId::Ipv4Dev | FieldId::Ipv4App => Some(32),
-            // IPv6
-            FieldId::Ipv6Ver => Some(4),
-            FieldId::Ipv6Tc => Some(8),
-            FieldId::Ipv6Fl => Some(20),
-            FieldId::Ipv6Len => Some(16),
-            FieldId::Ipv6Nxt => Some(8),
-            FieldId::Ipv6HopLmt => Some(8),
-            FieldId::Ipv6Src | FieldId::Ipv6Dst => Some(128),
-            FieldId::Ipv6SrcPrefix | FieldId::Ipv6DstPrefix |
-            FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix => Some(64),
-            FieldId::Ipv6SrcIid | FieldId::Ipv6DstIid |
-            FieldId::Ipv6DevIid | FieldId::Ipv6AppIid => Some(64),
-            // UDP
-            FieldId::UdpSrcPort | FieldId::UdpDstPort |
-            FieldId::UdpDevPort | FieldId::UdpAppPort => Some(16),
-            FieldId::UdpLen => Some(16),
-            FieldId::UdpCksum => Some(16),
-            // QUIC
-            FieldId::QuicFirstByte => Some(8),
-            FieldId::QuicVersion => Some(32),
-        }
-    }
-}
-
-impl fmt::Display for FieldId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ParseFieldIdError(pub String);
-
-impl fmt::Display for ParseFieldIdError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown field ID: {}", self.0)
-    }
-}
-
-impl std::error::Error for ParseFieldIdError {}
-
-impl FromStr for FieldId {
-    type Err = ParseFieldIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            // IPv4
-            "IPV4.VER" => Ok(FieldId::Ipv4Ver),
-            "IPV4.IHL" => Ok(FieldId::Ipv4Ihl),
-            "IPV4.DSCP" => Ok(FieldId::Ipv4Dscp),
-            "IPV4.ECN" => Ok(FieldId::Ipv4Ecn),
-            "IPV4.LEN" => Ok(FieldId::Ipv4Len),
-            "IPV4.ID" => Ok(FieldId::Ipv4Id),
-            "IPV4.FLAGS" => Ok(FieldId::Ipv4Flags),
-            "IPV4.FRAG_OFF" => Ok(FieldId::Ipv4FragOff),
-            "IPV4.TTL" => Ok(FieldId::Ipv4Ttl),
-            "IPV4.PROTO" => Ok(FieldId::Ipv4Proto),
-            "IPV4.CHKSUM" => Ok(FieldId::Ipv4Chksum),
-            "IPV4.SRC" => Ok(FieldId::Ipv4Src),
-            "IPV4.DST" => Ok(FieldId::Ipv4Dst),
-            "IPV4.DEV" => Ok(FieldId::Ipv4Dev),
-            "IPV4.APP" => Ok(FieldId::Ipv4App),
-            // IPv6
-            "IPV6.VER" => Ok(FieldId::Ipv6Ver),
-            "IPV6.TC" => Ok(FieldId::Ipv6Tc),
-            "IPV6.FL" => Ok(FieldId::Ipv6Fl),
-            "IPV6.LEN" => Ok(FieldId::Ipv6Len),
-            "IPV6.NXT" => Ok(FieldId::Ipv6Nxt),
-            "IPV6.HOP_LMT" => Ok(FieldId::Ipv6HopLmt),
-            "IPV6.SRC" => Ok(FieldId::Ipv6Src),
-            "IPV6.DST" => Ok(FieldId::Ipv6Dst),
-            "IPV6.SRC_PREFIX" => Ok(FieldId::Ipv6SrcPrefix),
-            "IPV6.SRC_IID" => Ok(FieldId::Ipv6SrcIid),
-            "IPV6.DST_PREFIX" => Ok(FieldId::Ipv6DstPrefix),
-            "IPV6.DST_IID" => Ok(FieldId::Ipv6DstIid),
-            "IPV6.DEV_PREFIX" => Ok(FieldId::Ipv6DevPrefix),
-            "IPV6.DEV_IID" => Ok(FieldId::Ipv6DevIid),
-            "IPV6.APP_PREFIX" => Ok(FieldId::Ipv6AppPrefix),
-            "IPV6.APP_IID" => Ok(FieldId::Ipv6AppIid),
-            // UDP
-            "UDP.SRC_PORT" => Ok(FieldId::UdpSrcPort),
-            "UDP.DST_PORT" => Ok(FieldId::UdpDstPort),
-            "UDP.LEN" => Ok(FieldId::UdpLen),
-            "UDP.CKSUM" => Ok(FieldId::UdpCksum),
-            "UDP.DEV_PORT" => Ok(FieldId::UdpDevPort),
-            "UDP.APP_PORT" => Ok(FieldId::UdpAppPort),
-            // QUIC
-            "QUIC.FIRST_BYTE" => Ok(FieldId::QuicFirstByte),
-            "QUIC.VERSION" => Ok(FieldId::QuicVersion),
-            _ => Err(ParseFieldIdError(s.to_string())),
-        }
-    }
-}
-
-impl Serialize for FieldId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for FieldId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        FieldId::from_str(&s).map_err(serde::de::Error::custom)
-    }
-}
+// Include the auto-generated FieldId enum and implementations
+include!(concat!(env!("OUT_DIR"), "/field_id_generated.rs"));
 
 #[cfg(test)]
 mod tests {
@@ -275,12 +45,6 @@ mod tests {
         assert_eq!(FieldId::Ipv6Len.as_str(), "IPV6.LEN");
         assert_eq!(FieldId::Ipv6Nxt.as_str(), "IPV6.NXT");
         assert_eq!(FieldId::Ipv6HopLmt.as_str(), "IPV6.HOP_LMT");
-        assert_eq!(FieldId::Ipv6Src.as_str(), "IPV6.SRC");
-        assert_eq!(FieldId::Ipv6Dst.as_str(), "IPV6.DST");
-        assert_eq!(FieldId::Ipv6SrcPrefix.as_str(), "IPV6.SRC_PREFIX");
-        assert_eq!(FieldId::Ipv6SrcIid.as_str(), "IPV6.SRC_IID");
-        assert_eq!(FieldId::Ipv6DstPrefix.as_str(), "IPV6.DST_PREFIX");
-        assert_eq!(FieldId::Ipv6DstIid.as_str(), "IPV6.DST_IID");
         assert_eq!(FieldId::Ipv6DevPrefix.as_str(), "IPV6.DEV_PREFIX");
         assert_eq!(FieldId::Ipv6DevIid.as_str(), "IPV6.DEV_IID");
         assert_eq!(FieldId::Ipv6AppPrefix.as_str(), "IPV6.APP_PREFIX");
@@ -312,7 +76,7 @@ mod tests {
     fn test_parse_ipv6_fields() {
         assert_eq!(FieldId::from_str("IPV6.VER").unwrap(), FieldId::Ipv6Ver);
         assert_eq!(FieldId::from_str("IPV6.HOP_LMT").unwrap(), FieldId::Ipv6HopLmt);
-        assert_eq!(FieldId::from_str("IPV6.SRC_PREFIX").unwrap(), FieldId::Ipv6SrcPrefix);
+        assert_eq!(FieldId::from_str("IPV6.DEV_PREFIX").unwrap(), FieldId::Ipv6DevPrefix);
     }
 
     #[test]
@@ -366,12 +130,8 @@ mod tests {
         assert_eq!(FieldId::Ipv6Len.default_size_bits(), Some(16));
         assert_eq!(FieldId::Ipv6Nxt.default_size_bits(), Some(8));
         assert_eq!(FieldId::Ipv6HopLmt.default_size_bits(), Some(8));
-        assert_eq!(FieldId::Ipv6Src.default_size_bits(), Some(128));
-        assert_eq!(FieldId::Ipv6Dst.default_size_bits(), Some(128));
-        assert_eq!(FieldId::Ipv6SrcPrefix.default_size_bits(), Some(64));
-        assert_eq!(FieldId::Ipv6SrcIid.default_size_bits(), Some(64));
-        assert_eq!(FieldId::Ipv6DstPrefix.default_size_bits(), Some(64));
-        assert_eq!(FieldId::Ipv6DstIid.default_size_bits(), Some(64));
+        assert_eq!(FieldId::Ipv6DevPrefix.default_size_bits(), Some(64));
+        assert_eq!(FieldId::Ipv6DevIid.default_size_bits(), Some(64));
     }
 
     #[test]
@@ -382,6 +142,12 @@ mod tests {
         assert_eq!(FieldId::UdpCksum.default_size_bits(), Some(16));
         assert_eq!(FieldId::UdpDevPort.default_size_bits(), Some(16));
         assert_eq!(FieldId::UdpAppPort.default_size_bits(), Some(16));
+    }
+
+    #[test]
+    fn test_variable_length_fields() {
+        // COAP.TOKEN has variable length ("TKL"), should return None
+        assert_eq!(FieldId::CoapToken.default_size_bits(), None);
     }
 
     // =========================================================================

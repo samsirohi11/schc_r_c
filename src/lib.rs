@@ -2,7 +2,6 @@
 
 pub mod error;
 pub mod field_id;
-pub mod field_context;
 pub mod rule;
 
 // Core functional modules
@@ -20,7 +19,6 @@ pub mod streaming_tree;
 // Core error/result types
 pub use error::{SchcError, Result};
 pub use field_id::FieldId;
-pub use field_context::FieldContext;
 pub use rule::{Rule, RuleSet, Field, MatchingOperator, CompressionAction};
 
 // Re-export main types from streaming_tree for ease of use

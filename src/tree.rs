@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use crate::field_id::FieldId;
-use crate::field_context::FieldContext;
 use crate::rule::{Rule, Field, MatchingOperator, CompressionAction, ParsedTargetValue, RuleValue};
 
 // =============================================================================
@@ -130,7 +129,7 @@ impl TreeNode {
 // =============================================================================
 
 /// Build a hierarchical tree from compression rules
-pub fn build_tree(rules: &[Rule], _field_context: &FieldContext) -> TreeNode {
+pub fn build_tree(rules: &[Rule]) -> TreeNode {
     let mut root = TreeNode::new_root();
 
     for rule in rules {
@@ -564,8 +563,7 @@ mod tests {
 
     #[test]
     fn test_build_tree_empty_rules() {
-        let field_context = FieldContext::default();
-        let tree = build_tree(&[], &field_context);
+        let tree = build_tree(&[]);
         
         assert!(tree.branches.is_empty());
         assert_eq!(tree.count_nodes(), 1); // Just root
@@ -585,8 +583,7 @@ mod tests {
         ]"#;
         
         let ruleset = RuleSet::from_json(json).unwrap();
-        let field_context = FieldContext::default();
-        let tree = build_tree(&ruleset.rules, &field_context);
+        let tree = build_tree(&ruleset.rules);
         
         assert_eq!(tree.count_leaves(), 1);
         
@@ -616,8 +613,7 @@ mod tests {
         ]"#;
         
         let ruleset = RuleSet::from_json(json).unwrap();
-        let field_context = FieldContext::default();
-        let tree = build_tree(&ruleset.rules, &field_context);
+        let tree = build_tree(&ruleset.rules);
         
         assert_eq!(tree.count_leaves(), 2);
         
@@ -639,8 +635,7 @@ mod tests {
         ]"#;
         
         let ruleset = RuleSet::from_json(json).unwrap();
-        let field_context = FieldContext::default();
-        let tree = build_tree(&ruleset.rules, &field_context);
+        let tree = build_tree(&ruleset.rules);
         
         assert_eq!(tree.count_leaves(), 1);
     }
@@ -656,8 +651,7 @@ mod tests {
         ]"#;
         
         let ruleset = RuleSet::from_json(json).unwrap();
-        let field_context = FieldContext::default();
-        let tree = build_tree(&ruleset.rules, &field_context);
+        let tree = build_tree(&ruleset.rules);
         
         assert_eq!(tree.count_leaves(), 0); // Empty compression rules are skipped
     }

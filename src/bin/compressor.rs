@@ -2,7 +2,7 @@
 //!
 //! Runs SCHC compression on packets from a pcap file using streaming tree method.
 
-use schc::{RuleSet, FieldContext, build_tree, compress_packet, decompress_packet, display_tree, Direction};
+use schc::{RuleSet, build_tree, compress_packet, decompress_packet, display_tree, Direction};
 use clap::Parser;
 use anyhow::{Context, Result};
 use pcap_file::pcapng::{PcapNgReader, Block};
@@ -19,10 +19,6 @@ struct Args {
     /// Path to the pcapng file
     #[arg(short, long)]
     pcap: String,
-    
-    /// Path to the field context JSON file
-    #[arg(short, long)]
-    field_context: String,
     
     /// Enable debug mode (show field-by-field comparison)
     #[arg(short, long, default_value_t = false)]
@@ -44,12 +40,6 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     
-    // Load field context
-    println!("Loading field context from: {}", args.field_context);
-    let field_context = FieldContext::from_file(&args.field_context)
-        .context("Failed to load field context")?;
-    println!("Loaded {} field definitions\n", field_context.fields.len());
-    
     // Load rules
     println!("Loading rules from: {}", args.rules);
     let ruleset = RuleSet::from_file(&args.rules)
@@ -58,7 +48,7 @@ fn main() -> Result<()> {
 
     // Build rule tree
     println!("Building rule tree...");
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     
     if args.debug {
         display_tree(&tree);
@@ -106,7 +96,7 @@ fn main() -> Result<()> {
                     );
                     
                     // Compress packet using streaming tree
-                    match compress_packet(&tree, &packet_data, direction, &ruleset.rules, &field_context, args.debug) {
+                    match compress_packet(&tree, &packet_data, direction, &ruleset.rules, args.debug) {
                         Ok(compressed) => {
                             compressed_count += 1;
                             total_original_bits += compressed.original_header_bits;
@@ -170,7 +160,6 @@ fn main() -> Result<()> {
                                     &compressed.data,
                                     &ruleset.rules,
                                     direction,
-                                    &field_context,
                                     payload,
                                 ) {
                                     Ok(decompressed) => {

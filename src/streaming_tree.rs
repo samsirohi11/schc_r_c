@@ -13,7 +13,6 @@
 
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
-use crate::field_context::FieldContext;
 use crate::rule::{Rule, MatchingOperator, CompressionAction};
 
 // Re-export core types from submodules
@@ -39,7 +38,6 @@ pub fn compress_packet(
     raw_packet: &[u8],
     direction: Direction,
     rules: &[Rule],
-    field_context: &FieldContext,
     debug: bool,
 ) -> Result<CompressedPacket> {
     let mut parser = StreamingParser::new(raw_packet, direction)?;
@@ -50,7 +48,7 @@ pub fn compress_packet(
         println!("\n--- Streaming Tree Traversal ---");
     }
 
-    traverse_and_compress(tree, &mut parser, rules, field_context, &mut Vec::new(), &mut matches, debug, 0);
+    traverse_and_compress(tree, &mut parser, rules, &mut Vec::new(), &mut matches, debug, 0);
 
     if matches.is_empty() {
         return Err(SchcError::NoMatchingRule);
@@ -94,7 +92,6 @@ fn traverse_and_compress(
     node: &TreeNode,
     parser: &mut StreamingParser,
     rules: &[Rule],
-    field_context: &FieldContext,
     path: &mut Vec<(FieldId, FieldValue, BranchInfo)>,
     matches: &mut Vec<CompressionResult>,
     debug: bool,
@@ -106,7 +103,7 @@ fn traverse_and_compress(
         if let (Some(rule_id), Some(_rule_id_length)) = (node.rule_id, node.rule_id_length) {
             if let Some(rule) = rules.iter().find(|r| r.rule_id == rule_id) {
                 // Compress using collected path
-                let result = compress_with_rule(rule, parser, field_context);
+                let result = compress_with_rule(rule, parser);
                 
                 if debug {
                     println!("{}└─ ✓ MATCHED Rule {}/{} (savings: {} bits = {:.2} bytes)", 
@@ -138,7 +135,7 @@ fn traverse_and_compress(
     for (key, branches) in &node.branches {
         for branch in branches {
             if key.value == Some(END_MARKER.to_vec()) {
-                traverse_and_compress(&branch.node, parser, rules, field_context, path, matches, debug, depth);
+                traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth);
                 continue;
             }
 
@@ -187,7 +184,7 @@ fn traverse_and_compress(
                     if let Some(fv) = field_value {
                         path.push((branch.info.fid, fv, branch.info.clone()));
                     }
-                    traverse_and_compress(&branch.node, parser, rules, field_context, path, matches, debug, depth + 1);
+                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1);
                     path.pop();
                 }
             }

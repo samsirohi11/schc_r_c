@@ -3,7 +3,7 @@
 //! This example demonstrates basic usage of the SCHC library to compress
 //! an IPv6/UDP packet header.
 
-use schc::{RuleSet, FieldContext, build_tree, compress_packet, Direction};
+use schc::{RuleSet, build_tree, compress_packet, Direction};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Define a simple rule inline
@@ -29,11 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ruleset = RuleSet::from_json(rules_json)?;
     println!("Loaded {} rule(s)", ruleset.rules.len());
 
-    // Create empty field context (uses defaults)
-    let field_context = FieldContext::default();
-
     // Build the rule tree
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     println!("Built rule tree with {} nodes", tree.count_nodes());
 
     // Create a sample IPv6/UDP packet with Ethernet header
@@ -41,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPacket size: {} bytes", packet.len());
 
     // Compress the packet
-    match compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false) {
+    match compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false) {
         Ok(result) => {
             println!("\n=== Compression Result ===");
             println!("Rule ID:           {}/{}", result.rule_id, result.rule_id_length);

@@ -113,6 +113,36 @@
       "unit": "bits",
       "description": "IPv6 Hop Limit field"
     },
+    "IPV6.SRC": {
+      "length": 128,
+      "unit": "bits",
+      "description": "IPv6 Source Address (full 128 bits)"
+    },
+    "IPV6.DST": {
+      "length": 128,
+      "unit": "bits",
+      "description": "IPv6 Destination Address (full 128 bits)"
+    },
+    "IPV6.SRC_PREFIX": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Source Address Prefix (first 64 bits)"
+    },
+    "IPV6.SRC_IID": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Source Address Interface ID (last 64 bits)"
+    },
+    "IPV6.DST_PREFIX": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Destination Address Prefix (first 64 bits)"
+    },
+    "IPV6.DST_IID": {
+      "length": 64,
+      "unit": "bits",
+      "description": "IPv6 Destination Address Interface ID (last 64 bits)"
+    },
     "IPV6.DEV_PREFIX": {
       "length": 64,
       "unit": "bits",

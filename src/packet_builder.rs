@@ -1,7 +1,7 @@
 //! Packet Header Builder
 //!
 //! Reconstructs complete protocol headers from decompressed field values.
-//! Handles IPv4, IPv6, UDP, and QUIC header reconstruction with proper
+//! Handles IPv4, IPv6, UDP, and QUIC (partially) header reconstruction with proper
 //! byte ordering, checksum computation, and length calculation.
 
 use std::collections::HashMap;
@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
 use crate::parser::{FieldValue, Direction};
-use crate::field_context::FieldContext;
 
 // =============================================================================
 // Header Reconstruction Result
@@ -39,7 +38,6 @@ pub struct ReconstructedHeaders {
 pub fn build_headers(
     fields: &HashMap<FieldId, FieldValue>,
     direction: Direction,
-    _field_context: &FieldContext,
     payload: Option<&[u8]>,
 ) -> Result<ReconstructedHeaders> {
     let payload_len = payload.map(|p| p.len()).unwrap_or(0);
@@ -86,7 +84,7 @@ pub fn build_headers(
     
     // Build headers
     let mut data = Vec::new();
-    let ip_start = 0; // No Ethernet header for now
+    let ip_start = 0; // ethernet header is not compressed
     
     // Build IP header (payload = transport + quic + actual_payload)
     let ip_header = if ip_version == 6 {

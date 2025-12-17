@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
-use crate::field_context::FieldContext;
 use crate::parser::{FieldValue, Direction};
 use crate::rule::{Rule, Field, CompressionAction, ParsedTargetValue, RuleValue};
 
@@ -86,7 +85,6 @@ pub fn match_rule_id<'a>(data: &[u8], rules: &'a [Rule]) -> Result<&'a Rule> {
 /// * `compressed_data` - The compressed SCHC packet (rule ID + residues)
 /// * `rules` - Available SCHC compression rules
 /// * `direction` - Packet direction (for directional field reconstruction)
-/// * `field_context` - Field definitions
 /// * `original_payload` - Optional payload to append to reconstructed header
 ///
 /// # Returns
@@ -95,7 +93,6 @@ pub fn decompress_packet(
     compressed_data: &[u8],
     rules: &[Rule],
     direction: Direction,
-    field_context: &FieldContext,
     original_payload: Option<&[u8]>,
 ) -> Result<DecompressedPacket> {
     // Match rule ID
@@ -108,12 +105,12 @@ pub fn decompress_packet(
     let mut fields: HashMap<FieldId, FieldValue> = HashMap::new();
     
     for field in &rule.compression {
-        let value = decompress_field(bits, &mut bit_pos, field, field_context)?;
+        let value = decompress_field(bits, &mut bit_pos, field)?;
         fields.insert(field.fid, value);
     }
     
     // Build the reconstructed header
-    let header_data = build_header(&fields, direction, field_context, original_payload)?;
+    let header_data = build_header(&fields, direction, original_payload)?;
     
     // Build full packet (header + payload)
     let mut full_data = header_data.clone();
@@ -141,7 +138,6 @@ fn decompress_field(
     bits: &BitSlice<u8, Msb0>,
     bit_pos: &mut usize,
     field: &Field,
-    field_context: &FieldContext,
 ) -> Result<FieldValue> {
     match field.cda {
         CompressionAction::NotSent => {
@@ -150,7 +146,7 @@ fn decompress_field(
         }
         CompressionAction::ValueSent => {
             // Read full field value from residue
-            let field_bits = get_field_size_bits(field, field_context);
+            let field_bits = get_field_size_bits(field);
             read_field_value(bits, bit_pos, field_bits, field.fid)
         }
         CompressionAction::MappingSent => {
@@ -159,7 +155,7 @@ fn decompress_field(
         }
         CompressionAction::Lsb(_) => {
             // Combine MSB from TV with LSB from residue
-            decompress_lsb(bits, bit_pos, field, field_context)
+            decompress_lsb(bits, bit_pos, field)
         }
         CompressionAction::Compute => {
             // Placeholder - will be computed during header reconstruction
@@ -234,10 +230,9 @@ fn decompress_lsb(
     bits: &BitSlice<u8, Msb0>,
     bit_pos: &mut usize,
     field: &Field,
-    field_context: &FieldContext,
 ) -> Result<FieldValue> {
     let msb_bits = field.mo_val.unwrap_or(0) as usize;
-    let field_size = get_field_size_bits(field, field_context) as usize;
+    let field_size = get_field_size_bits(field) as usize;
     
     if msb_bits > field_size {
         return Err(SchcError::Decompression(format!(
@@ -374,12 +369,10 @@ fn read_field_value(
 // =============================================================================
 
 /// Get field size in bits
-fn get_field_size_bits(field: &Field, field_context: &FieldContext) -> u16 {
+fn get_field_size_bits(field: &Field) -> u16 {
+    // Priority: 1. Explicit FL in rule, 2. FieldId default from JSON
     if let Some(fl) = field.fl {
         return fl;
-    }
-    if let Some(bits) = field_context.get_field_length_bits(field.fid.as_str()) {
-        return bits;
     }
     field.fid.default_size_bits().unwrap_or(8)
 }
@@ -427,10 +420,9 @@ fn rule_value_to_field_value(rv: &RuleValue, fid: FieldId) -> Result<FieldValue>
 fn build_header(
     fields: &HashMap<FieldId, FieldValue>,
     direction: Direction,
-    field_context: &FieldContext,
     payload: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
-    let reconstructed = crate::packet_builder::build_headers(fields, direction, field_context, payload)?;
+    let reconstructed = crate::packet_builder::build_headers(fields, direction, payload)?;
     Ok(reconstructed.data)
 }
 

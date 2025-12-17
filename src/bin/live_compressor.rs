@@ -3,7 +3,7 @@
 //! Captures packets from a live network interface and compresses them using SCHC.
 //! Currently only supports compression of outgoing packets (decompression not implemented yet).
 
-use schc::{RuleSet, FieldContext, build_tree, compress_packet, display_tree, Direction};
+use schc::{RuleSet, build_tree, compress_packet, display_tree, Direction};
 use clap::Parser;
 use anyhow::{Context, Result, bail};
 use pnet::datalink::{self, Channel::Ethernet, NetworkInterface};
@@ -25,10 +25,6 @@ struct Args {
     /// Path to the rules JSON file
     #[arg(short, long)]
     rules: Option<String>,
-    
-    /// Path to the field context JSON file
-    #[arg(short, long)]
-    field_context: Option<String>,
     
     /// Enable debug mode (show field-by-field comparison)
     #[arg(short, long, default_value_t = false)]
@@ -75,7 +71,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     
-    // Require interface, rules, and field_context for capture mode
+    // Require interface and rules for capture mode
     let interface_name = args.interface
         .as_ref()
         .context("Interface name required. Use --interface <name> or --list-interfaces to see available interfaces")?;
@@ -83,16 +79,6 @@ fn main() -> Result<()> {
     let rules_path = args.rules
         .as_ref()
         .context("Rules file required. Use --rules <path>")?;
-    
-    let field_context_path = args.field_context
-        .as_ref()
-        .context("Field context file required. Use --field-context <path>")?;
-    
-    // Load field context
-    println!("Loading field context from: {}", field_context_path);
-    let field_context = FieldContext::from_file(field_context_path)
-        .context("Failed to load field context")?;
-    println!("Loaded {} field definitions\n", field_context.fields.len());
     
     // Load rules
     println!("Loading rules from: {}", rules_path);
@@ -102,7 +88,7 @@ fn main() -> Result<()> {
     
     // Build rule tree
     println!("Building rule tree...");
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     
     if args.debug {
         display_tree(&tree);
@@ -179,7 +165,7 @@ fn main() -> Result<()> {
                 };
                 
                 // Attempt compression
-                match compress_packet(&tree, packet_data, direction, &ruleset.rules, &field_context, args.debug) {
+                match compress_packet(&tree, packet_data, direction, &ruleset.rules, args.debug) {
                     Ok(compressed) => {
                         compressed_count += 1;
                         total_original_bits += compressed.original_header_bits;

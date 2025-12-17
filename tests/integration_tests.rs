@@ -4,7 +4,7 @@
 //! with real packet data and rule sets.
 
 use schc::{
-    RuleSet, FieldContext, build_tree, compress_packet, Direction
+    RuleSet, build_tree, compress_packet, Direction
 };
 
 /// Creates a minimal IPv6/UDP packet with ethernet header
@@ -99,11 +99,10 @@ fn test_compress_ipv6_version_only() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -133,11 +132,10 @@ fn test_compress_ipv6_multiple_fields() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -164,12 +162,11 @@ fn test_compress_no_matching_rule() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet(); // This has IPv6 version = 6
     
     // Rule expects version = 4, so it shouldn't match
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_err());
 }
 
@@ -200,11 +197,10 @@ fn test_selects_best_compression_rule() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -230,11 +226,10 @@ fn test_ignore_matching_operator() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -256,11 +251,10 @@ fn test_msb_matching_operator() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet(); // Has UDP source port 8080 (0x1F90)
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -287,16 +281,15 @@ fn test_direction_affects_port_matching() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet(); // Source: 8080, Dest: 443
     
     // UP direction: DEV_PORT = source = 8080 -> should match
-    let result_up = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result_up = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result_up.is_ok());
     
     // DOWN direction: DEV_PORT = dest = 443 -> should NOT match (expecting 8080)
-    let result_down = compress_packet(&tree, &packet, Direction::Down, &ruleset.rules, &field_context, false);
+    let result_down = compress_packet(&tree, &packet, Direction::Down, &ruleset.rules, false);
     assert!(result_down.is_err());
 }
 
@@ -319,11 +312,10 @@ fn test_compress_ipv4_packet() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv4_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -339,11 +331,10 @@ fn test_compress_ipv4_packet() {
 #[test]
 fn test_empty_ruleset() {
     let ruleset = RuleSet::from_json("[]").unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_err()); // No rules = no match
 }
 
@@ -358,12 +349,11 @@ fn test_rule_with_empty_compression() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
     // Empty compression rules are skipped during tree building
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_err());
 }
 
@@ -385,11 +375,10 @@ fn test_value_sent_cda() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet();
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();
@@ -417,11 +406,10 @@ fn test_lsb_cda() {
     ]"#;
     
     let ruleset = RuleSet::from_json(json).unwrap();
-    let field_context = FieldContext::default();
-    let tree = build_tree(&ruleset.rules, &field_context);
+    let tree = build_tree(&ruleset.rules);
     let packet = create_ipv6_udp_packet(); // UDP source port 8080 (0x1F90)
     
-    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, &field_context, false);
+    let result = compress_packet(&tree, &packet, Direction::Up, &ruleset.rules, false);
     assert!(result.is_ok());
     
     let compressed = result.unwrap();

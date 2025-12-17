@@ -6,7 +6,6 @@
 use bitvec::prelude::*;
 
 use crate::field_id::FieldId;
-use crate::field_context::FieldContext;
 use crate::parser::{FieldValue, StreamingParser};
 use crate::rule::{Rule, Field, CompressionAction, ParsedTargetValue};
 use crate::matcher::values_match;
@@ -71,7 +70,7 @@ impl CompressedPacket {
 // =============================================================================
 
 /// Compress a packet using a matched rule
-pub fn compress_with_rule(rule: &Rule, parser: &StreamingParser, field_context: &FieldContext) -> CompressionResult {
+pub fn compress_with_rule(rule: &Rule, parser: &StreamingParser) -> CompressionResult {
     let mut bits = BitVec::<u8, Msb0>::new();
     let mut field_details = Vec::new();
     let mut total_original_bits: usize = 0;
@@ -84,11 +83,11 @@ pub fn compress_with_rule(rule: &Rule, parser: &StreamingParser, field_context: 
     // Process each field according to CDA
     for field in &rule.compression {
         if let Some(field_value) = parser.parsed_fields.get(&field.fid) {
-            let original_bits = get_field_size_bits(field, field_value, field_context);
+            let original_bits = get_field_size_bits(field, field_value);
             total_original_bits += original_bits as usize;
             
             let bits_before = bits.len();
-            compress_field(&mut bits, field, field_value, field_context);
+            compress_field(&mut bits, field, field_value);
             let sent_bits = (bits.len() - bits_before) as u16;
             
             let savings = original_bits as i16 - sent_bits as i16;
@@ -123,7 +122,7 @@ pub fn compress_with_rule(rule: &Rule, parser: &StreamingParser, field_context: 
 }
 
 /// Compress a single field according to its CDA
-fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue, field_context: &FieldContext) {
+fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue) {
     match field.cda {
         CompressionAction::NotSent => {
             // Nothing sent
@@ -157,7 +156,7 @@ fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue
         }
         CompressionAction::Lsb(_) => {
             let msb_bits = field.mo_val.unwrap_or(0);
-            let field_size = get_field_size_bits(field, value, field_context);
+            let field_size = get_field_size_bits(field, value);
             
             if msb_bits as u16 <= field_size {
                 let lsb_bits = field_size - msb_bits as u16;
@@ -237,13 +236,10 @@ fn send_lsb(bits: &mut BitVec<u8, Msb0>, value: &FieldValue, num_bits: u8) {
 }
 
 /// Get the field size in bits
-pub fn get_field_size_bits(field: &Field, value: &FieldValue, field_context: &FieldContext) -> u16 {
+pub fn get_field_size_bits(field: &Field, value: &FieldValue) -> u16 {
+    // Priority: 1. Explicit FL in rule, 2. FieldId default from JSON, 3. Value size
     if let Some(fl) = field.get_field_length() {
         return fl;
-    }
-    
-    if let Some(bits) = field_context.get_field_length_bits(field.fid.as_str()) {
-        return bits;
     }
     
     if let Some(bits) = field.fid.default_size_bits() {
@@ -410,9 +406,8 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U8(6);
-        let context = FieldContext::default();
         
-        assert_eq!(get_field_size_bits(&field, &value, &context), 4);
+        assert_eq!(get_field_size_bits(&field, &value), 4);
     }
 
     #[test]
@@ -428,9 +423,8 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(8080);
-        let context = FieldContext::default();
         
-        assert_eq!(get_field_size_bits(&field, &value, &context), 16); // UDP port is 16 bits
+        assert_eq!(get_field_size_bits(&field, &value), 16); // UDP port is 16 bits
     }
 
     #[test]
@@ -445,12 +439,10 @@ mod tests {
             mo_val: None,
             parsed_tv: None,
         };
-        // FieldId::Ipv6Ver has a default of 4 bits, so it should use that
         // not the value's size (8 bits for U8)
         let value = FieldValue::U8(6);
-        let context = FieldContext::default();
         
-        assert_eq!(get_field_size_bits(&field, &value, &context), 4);
+        assert_eq!(get_field_size_bits(&field, &value), 4);
     }
 
     // =========================================================================
@@ -507,9 +499,8 @@ mod tests {
             parsed_tv: Some(crate::rule::ParsedTargetValue::Single(crate::rule::RuleValue::U64(6))),
         };
         let value = FieldValue::U8(6);
-        let context = FieldContext::default();
         
-        compress_field(&mut bits, &field, &value, &context);
+        compress_field(&mut bits, &field, &value);
         
         assert_eq!(bits.len(), 0); // Nothing should be added
     }
@@ -527,9 +518,8 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(0x1234);
-        let context = FieldContext::default();
         
-        compress_field(&mut bits, &field, &value, &context);
+        compress_field(&mut bits, &field, &value);
         
         assert_eq!(bits.len(), 0); // Nothing should be added
     }
@@ -547,9 +537,8 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(0xABCD);
-        let context = FieldContext::default();
         
-        compress_field(&mut bits, &field, &value, &context);
+        compress_field(&mut bits, &field, &value);
         
         assert_eq!(bits.len(), 16);
         let bytes = bits.into_vec();
@@ -569,9 +558,8 @@ mod tests {
             parsed_tv: Some(crate::rule::ParsedTargetValue::Single(crate::rule::RuleValue::U64(0x1200))),
         };
         let value = FieldValue::U16(0x1234); // LSB 8 bits: 0x34
-        let context = FieldContext::default();
         
-        compress_field(&mut bits, &field, &value, &context);
+        compress_field(&mut bits, &field, &value);
         
         assert_eq!(bits.len(), 8); // Only LSB 8 bits sent
         let bytes = bits.into_vec();

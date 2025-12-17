@@ -81,7 +81,6 @@ schc = { git = "https://github.com/samsirohi11/schc_r_c.git" }
 cargo run --release --bin compressor -- \
     --rules test-rule.json \
     --pcap coap-observe.pcapng \
-    --field-context field-context.json \
     --debug
 ```
 
@@ -89,17 +88,16 @@ cargo run --release --bin compressor -- \
 
 - `-r, --rules <PATH>` - Path to rules JSON file
 - `-p, --pcap <PATH>` - Path to pcapng file
-- `-f, --field-context <PATH>` - Path to field context JSON
 - `-d, --debug` - Enable verbose debug output
 - `-m, --max-packets <N>` - Limit number of packets to process
 - `--first-packet-direction <UP|DOWN>` - Direction of first packet, default: UP
+- `-v, --verify` - Verify compression by decompressing and comparing
 
 #### Visualize Rule Tree
 
 ```bash
 cargo run --release --bin tree_builder -- \
-    --rules test-rule.json \
-    --field-context field-context.json
+    --rules test-rule.json
 ```
 
 #### Live Capture and Compress
@@ -114,7 +112,6 @@ cargo run --release --bin live_compressor -- --list-interfaces
 cargo run --release --bin live_compressor -- \
     --interface eth0 \
     --rules rules.json \
-    --field-context field-context.json \
     --debug
 ```
 
@@ -123,7 +120,6 @@ cargo run --release --bin live_compressor -- \
 - `-i, --interface <NAME>` - Network interface to capture from
 - `--list-interfaces` - List available network interfaces
 - `-r, --rules <PATH>` - Path to rules JSON file
-- `-c, --field-context <PATH>` - Path to field context JSON
 - `-d, --debug` - Enable verbose debug output
 - `-m, --max-packets <N>` - Limit number of packets to process (0 = unlimited)
 
@@ -232,8 +228,7 @@ The codebase is organized into focused modules:
 src/
 ├── lib.rs              # Public API exports
 ├── error.rs            # Error types
-├── field_id.rs         # Protocol field identifiers (enum-based for performance)
-├── field_context.rs    # Field definitions and size lookups
+├── field_id.rs         # Protocol field identifiers (generated at compile time)
 ├── rule.rs             # Rule parsing and structures
 ├── parser.rs           # Streaming packet parser
 ├── matcher.rs          # Matching operators (equal, ignore, MSB, match-mapping)
@@ -243,6 +238,8 @@ src/
 ├── tree.rs             # Rule tree structures
 ├── tree_display.rs     # Tree visualization
 ├── streaming_tree.rs   # Integration layer (unified parse+match+compress)
+├── build.rs            # Build script that generates FieldId enum from field-context.json
+field-context.json      # Source for field definitions
 └── bin/
     ├── compressor.rs      # CLI compression tool (pcap files)
     ├── live_compressor.rs # Live interface packet capture
