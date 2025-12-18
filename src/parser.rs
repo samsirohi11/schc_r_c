@@ -80,6 +80,21 @@ pub(crate) enum ProtocolLayer {
 }
 
 // =============================================================================
+// QUIC Context
+// =============================================================================
+
+/// QUIC parsing context to track connection ID lengths across field parsing
+#[derive(Debug, Clone, Default)]
+pub struct QuicContext {
+    /// Cached DCID length from DCID_LEN field (long header) or set externally for short header matching
+    pub dcid_len: Option<u8>,
+    /// Cached SCID length from SCID_LEN field (long headers only)
+    pub scid_len: Option<u8>,
+    /// Whether this is a long header packet (cached from first byte)
+    pub is_long_header: Option<bool>,
+}
+
+// =============================================================================
 // Streaming Parser
 // =============================================================================
 
@@ -91,6 +106,8 @@ pub struct StreamingParser<'a> {
     next_protocol: Option<u8>,
     direction: Direction,
     pub(crate) parsed_fields: HashMap<FieldId, FieldValue>,
+    /// QUIC context for tracking connection ID lengths
+    quic_ctx: QuicContext,
 }
 
 impl<'a> StreamingParser<'a> {
@@ -128,6 +145,7 @@ impl<'a> StreamingParser<'a> {
             next_protocol: None,
             direction,
             parsed_fields: HashMap::new(),
+            quic_ctx: QuicContext::default(),
         })
     }
 
@@ -240,7 +258,9 @@ impl<'a> StreamingParser<'a> {
             }
 
             // QUIC Fields
-            FieldId::QuicFirstByte | FieldId::QuicVersion => {
+            FieldId::QuicFirstByte | FieldId::QuicVersion |
+            FieldId::QuicDcidLen | FieldId::QuicDcid |
+            FieldId::QuicScidLen | FieldId::QuicScid => {
                 self.extract_quic_field(fid)
             }
 
@@ -436,20 +456,22 @@ impl<'a> StreamingParser<'a> {
 
     /// Extract QUIC header fields
     /// 
-    /// QUIC is only parsed when UDP port is 443 or 4433.
+    /// QUIC is only parsed when UDP port is 443, 4433, or 8080.
     /// 
     /// QUIC header structure (RFC 9000):
     /// - Long Header (first bit = 1):
     ///   - First byte (8 bits): Header Form (1) + Fixed Bit + Long Packet Type + Type-Specific Bits
     ///   - Version (32 bits)
-    ///   - ... (rest not parsed - DCID, SCID, etc.)
+    ///   - DCID Length (8 bits): 0-20
+    ///   - DCID (0-160 bits): variable based on DCID Length
+    ///   - SCID Length (8 bits): 0-20
+    ///   - SCID (0-160 bits): variable based on SCID Length
+    ///   - ... (type-specific payload)
     /// 
     /// - Short Header (first bit = 0):
     ///   - First byte (8 bits): Header Form (0) + Fixed Bit + Spin Bit + Reserved + Key Phase + PN Length
-    ///   - ... (no version field in short header)
-    /// 
-    /// Note: The first byte should be kept as-is (value-sent) in compression.
-    /// Only the version field is eligible for compression (not-sent) in long headers.
+    ///   - DCID (variable): length NOT encoded, must be known from connection context
+    ///   - ... (packet number)
      
     fn extract_quic_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let quic_start = match self.get_quic_start() {
@@ -471,6 +493,9 @@ impl<'a> StreamingParser<'a> {
         let first_byte = quic_data[0];
         let header_form = (first_byte >> 7) & 0x01; // Most significant bit: 1 = long, 0 = short
         let is_long_header = header_form == 1;
+        
+        // Cache header form in context
+        self.quic_ctx.is_long_header = Some(is_long_header);
 
         match fid {
             FieldId::QuicFirstByte => {
@@ -495,8 +520,169 @@ impl<'a> StreamingParser<'a> {
                 ]);
                 Ok(Some(FieldValue::U32(version)))
             }
+            FieldId::QuicDcidLen => {
+                if !is_long_header {
+                    // Short header doesn't have DCID length encoded
+                    return Ok(None);
+                }
+                
+                // DCID Length is at byte 5 (after first_byte + 4 bytes version)
+                if quic_data.len() < 6 {
+                    return Ok(None);
+                }
+                
+                let dcid_len = quic_data[5];
+                // Cache the DCID length for subsequent DCID parsing
+                self.quic_ctx.dcid_len = Some(dcid_len);
+                Ok(Some(FieldValue::U8(dcid_len)))
+            }
+            FieldId::QuicDcid => {
+                if is_long_header {
+                    // Long header: DCID starts at byte 6, length from DCID_LEN
+                    let dcid_len = match self.quic_ctx.dcid_len {
+                        Some(len) => len as usize,
+                        None => {
+                            // DCID_LEN not yet parsed, parse it now
+                            if quic_data.len() < 6 {
+                                return Ok(None);
+                            }
+                            let len = quic_data[5] as usize;
+                            self.quic_ctx.dcid_len = Some(len as u8);
+                            len
+                        }
+                    };
+                    
+                    // DCID starts at byte 6
+                    let dcid_start = 6;
+                    let dcid_end = dcid_start + dcid_len;
+                    
+                    if quic_data.len() < dcid_end {
+                        return Ok(None);
+                    }
+                    
+                    // Return empty bytes for 0-length DCID (valid case)
+                    let dcid = quic_data[dcid_start..dcid_end].to_vec();
+                    Ok(Some(FieldValue::Bytes(dcid)))
+                } else {
+                    // Short header: DCID starts at byte 1, length from connection context
+                    let dcid_len = match self.quic_ctx.dcid_len {
+                        Some(len) => len as usize,
+                        None => {
+                            // DCID length not set - cannot parse short header DCID
+                            // This is expected when context is not yet established
+                            return Ok(None);
+                        }
+                    };
+                    
+                    let dcid_start = 1;
+                    let dcid_end = dcid_start + dcid_len;
+                    
+                    if quic_data.len() < dcid_end {
+                        return Ok(None);
+                    }
+                    
+                    let dcid = quic_data[dcid_start..dcid_end].to_vec();
+                    Ok(Some(FieldValue::Bytes(dcid)))
+                }
+            }
+            FieldId::QuicScidLen => {
+                if !is_long_header {
+                    // Short header has no SCID
+                    return Ok(None);
+                }
+                
+                // SCID_LEN is after first_byte(1) + version(4) + dcid_len(1) + dcid(variable)
+                let dcid_len = match self.quic_ctx.dcid_len {
+                    Some(len) => len as usize,
+                    None => {
+                        // Parse DCID_LEN first
+                        if quic_data.len() < 6 {
+                            return Ok(None);
+                        }
+                        let len = quic_data[5] as usize;
+                        self.quic_ctx.dcid_len = Some(len as u8);
+                        len
+                    }
+                };
+                
+                let scid_len_offset = 6 + dcid_len;
+                if quic_data.len() <= scid_len_offset {
+                    return Ok(None);
+                }
+                
+                let scid_len = quic_data[scid_len_offset];
+                self.quic_ctx.scid_len = Some(scid_len);
+                Ok(Some(FieldValue::U8(scid_len)))
+            }
+            FieldId::QuicScid => {
+                if !is_long_header {
+                    // Short header has no SCID
+                    return Ok(None);
+                }
+                
+                // First ensure DCID_LEN is known
+                let dcid_len = match self.quic_ctx.dcid_len {
+                    Some(len) => len as usize,
+                    None => {
+                        if quic_data.len() < 6 {
+                            return Ok(None);
+                        }
+                        let len = quic_data[5] as usize;
+                        self.quic_ctx.dcid_len = Some(len as u8);
+                        len
+                    }
+                };
+                
+                // Then ensure SCID_LEN is known
+                let scid_len_offset = 6 + dcid_len;
+                let scid_len = match self.quic_ctx.scid_len {
+                    Some(len) => len as usize,
+                    None => {
+                        if quic_data.len() <= scid_len_offset {
+                            return Ok(None);
+                        }
+                        let len = quic_data[scid_len_offset] as usize;
+                        self.quic_ctx.scid_len = Some(len as u8);
+                        len
+                    }
+                };
+                
+                // SCID starts after SCID_LEN
+                let scid_start = scid_len_offset + 1;
+                let scid_end = scid_start + scid_len;
+                
+                if quic_data.len() < scid_end {
+                    return Ok(None);
+                }
+                
+                // Return empty bytes for 0-length SCID (valid case)
+                let scid = quic_data[scid_start..scid_end].to_vec();
+                Ok(Some(FieldValue::Bytes(scid)))
+            }
             _ => Ok(None),
         }
+    }
+    
+    /// Set the expected DCID length for short header QUIC packets
+    /// 
+    /// For short headers, the DCID length is not encoded in the packet.
+    /// This method should be called with the DCID length learned from
+    /// the QUIC handshake (e.g., from long header packets).
+    /// 
+    /// This also clears any cached DCID value so it will be reparsed
+    /// with the new expected length.
+    pub fn set_quic_dcid_len(&mut self, len: u8) {
+        // Only update and clear cache if length changed
+        if self.quic_ctx.dcid_len != Some(len) {
+            self.quic_ctx.dcid_len = Some(len);
+            // Clear cached DCID so it gets reparsed with new length
+            self.parsed_fields.remove(&FieldId::QuicDcid);
+        }
+    }
+    
+    /// Get the current QUIC context (for connection tracking)
+    pub fn quic_context(&self) -> &QuicContext {
+        &self.quic_ctx
     }
 }
 
@@ -525,6 +711,8 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
             FieldId::QuicFirstByte, FieldId::QuicVersion,
+            FieldId::QuicDcidLen, FieldId::QuicDcid,
+            FieldId::QuicScidLen, FieldId::QuicScid,
         ]
     } else if ip_version == 4 {
         vec![
@@ -535,6 +723,8 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
             FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
             FieldId::QuicFirstByte, FieldId::QuicVersion,
+            FieldId::QuicDcidLen, FieldId::QuicDcid,
+            FieldId::QuicScidLen, FieldId::QuicScid,
         ]
     } else {
         vec![]
@@ -1103,6 +1293,219 @@ mod tests {
         
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
         assert!(first_byte.is_some(), "Port 4433 should be recognized as QUIC");
+    }
+
+    // =========================================================================
+    // QUIC Connection ID parsing tests
+    // =========================================================================
+
+    #[test]
+    fn test_quic_long_header_dcid_len() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap();
+        assert!(dcid_len.is_some(), "Long header should have DCID length");
+        
+        match dcid_len.unwrap() {
+            FieldValue::U8(v) => assert_eq!(*v, 5, "DCID length should be 5"),
+            _ => panic!("Expected U8 for QUIC DCID length"),
+        }
+    }
+
+    #[test]
+    fn test_quic_long_header_dcid() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
+        assert!(dcid.is_some(), "Long header should have DCID");
+        
+        match dcid.unwrap() {
+            FieldValue::Bytes(v) => {
+                assert_eq!(v.len(), 5, "DCID should be 5 bytes");
+                assert_eq!(*v, vec![0x01, 0x02, 0x03, 0x04, 0x05], "DCID content mismatch");
+            },
+            _ => panic!("Expected Bytes for QUIC DCID"),
+        }
+    }
+
+    #[test]
+    fn test_quic_long_header_scid_len() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap();
+        assert!(scid_len.is_some(), "Long header should have SCID length");
+        
+        match scid_len.unwrap() {
+            FieldValue::U8(v) => assert_eq!(*v, 0, "SCID length should be 0"),
+            _ => panic!("Expected U8 for QUIC SCID length"),
+        }
+    }
+
+    #[test]
+    fn test_quic_long_header_scid_zero_length() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        let scid = parser.parse_field(FieldId::QuicScid).unwrap();
+        assert!(scid.is_some(), "Long header should have SCID (even if empty)");
+        
+        match scid.unwrap() {
+            FieldValue::Bytes(v) => {
+                assert_eq!(v.len(), 0, "SCID should be 0 bytes (empty)");
+            },
+            _ => panic!("Expected Bytes for QUIC SCID"),
+        }
+    }
+
+    #[test]
+    fn test_quic_short_header_no_dcid_len() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Short header doesn't encode DCID length
+        let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap();
+        assert!(dcid_len.is_none(), "Short header should NOT have DCID length encoded");
+    }
+
+    #[test]
+    fn test_quic_short_header_dcid_without_context() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Without setting DCID length context, DCID shouldn't parse
+        let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
+        assert!(dcid.is_none(), "Short header DCID should return None without context");
+    }
+
+    #[test]
+    fn test_quic_short_header_dcid_with_context() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Set DCID length from connection context (e.g., from handshake)
+        parser.set_quic_dcid_len(5);
+        
+        let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
+        assert!(dcid.is_some(), "Short header DCID should parse with context");
+        
+        match dcid.unwrap() {
+            FieldValue::Bytes(v) => {
+                assert_eq!(v.len(), 5, "DCID should be 5 bytes");
+                assert_eq!(*v, vec![0x01, 0x02, 0x03, 0x04, 0x05], "DCID content mismatch");
+            },
+            _ => panic!("Expected Bytes for QUIC DCID"),
+        }
+    }
+
+    #[test]
+    fn test_quic_short_header_no_scid() {
+        let packet = create_ipv6_quic_short_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Short header doesn't have SCID
+        let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap();
+        assert!(scid_len.is_none(), "Short header should NOT have SCID length");
+        
+        let scid = parser.parse_field(FieldId::QuicScid).unwrap();
+        assert!(scid.is_none(), "Short header should NOT have SCID");
+    }
+
+    /// Creates a QUIC long header packet with both DCID and SCID
+    fn create_quic_long_header_with_both_cids() -> Vec<u8> {
+        // Ethernet header (14 bytes)
+        let mut packet = vec![
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
+            0x86, 0xDD,                          // EtherType (IPv6)
+        ];
+        
+        // IPv6 header (40 bytes)
+        let ipv6_header = vec![
+            0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
+            0x00, 0x1C,             // Payload Length (28 bytes = 8 UDP + 20 QUIC)
+            0x11,                   // Next Header (UDP = 17)
+            0x40,                   // Hop Limit (64)
+            // Source: 2001:db8::1
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        ];
+        packet.extend(ipv6_header);
+        
+        // UDP header (8 bytes)
+        let udp_header = vec![
+            0x1F, 0x90, // Src Port: 8080
+            0x01, 0xBB, // Dst Port: 443 (QUIC)
+            0x00, 0x1C, // Length: 28 bytes
+            0x00, 0x00, // Checksum
+        ];
+        packet.extend(udp_header);
+        
+        // QUIC Long Header with both DCID and SCID
+        let quic_header = vec![
+            0xC3,                   // Long header: 1100 0011
+            0x00, 0x00, 0x00, 0x01, // Version: 1
+            0x04,                   // DCID Length: 4
+            0xAA, 0xBB, 0xCC, 0xDD, // DCID: 4 bytes
+            0x08,                   // SCID Length: 8
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // SCID: 8 bytes
+        ];
+        packet.extend(quic_header);
+        
+        packet
+    }
+
+    #[test]
+    fn test_quic_long_header_both_cids() {
+        let packet = create_quic_long_header_with_both_cids();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Parse DCID
+        let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap().unwrap();
+        match dcid_len {
+            FieldValue::U8(v) => assert_eq!(*v, 4, "DCID length should be 4"),
+            _ => panic!("Expected U8 for DCID length"),
+        }
+        
+        let dcid = parser.parse_field(FieldId::QuicDcid).unwrap().unwrap();
+        match dcid {
+            FieldValue::Bytes(v) => {
+                assert_eq!(*v, vec![0xAA, 0xBB, 0xCC, 0xDD], "DCID content mismatch");
+            },
+            _ => panic!("Expected Bytes for DCID"),
+        }
+        
+        // Parse SCID
+        let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap().unwrap();
+        match scid_len {
+            FieldValue::U8(v) => assert_eq!(*v, 8, "SCID length should be 8"),
+            _ => panic!("Expected U8 for SCID length"),
+        }
+        
+        let scid = parser.parse_field(FieldId::QuicScid).unwrap().unwrap();
+        match scid {
+            FieldValue::Bytes(v) => {
+                assert_eq!(*v, vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88], "SCID content mismatch");
+            },
+            _ => panic!("Expected Bytes for SCID"),
+        }
+    }
+
+    #[test]
+    fn test_quic_context_caches_dcid_len() {
+        let packet = create_ipv6_quic_long_header_packet();
+        let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
+        
+        // Parse DCID - this should cache DCID_LEN
+        let _ = parser.parse_field(FieldId::QuicDcid).unwrap();
+        
+        // Verify DCID length was cached in context
+        assert_eq!(parser.quic_context().dcid_len, Some(5));
     }
 }
 

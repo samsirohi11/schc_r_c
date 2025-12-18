@@ -56,12 +56,18 @@ pub fn compress_packet(
 
     // Find best match: prefer rules with more savings (higher is better)
     // For equal savings, prefer more fields (more complete rule)
+    // For equal fields, prefer longer rule_id_length (more specific/dynamic rules)
+    // For tie, prefer higher rule_id (newer dynamic rules)
     let best = matches.into_iter()
         .max_by(|a, b| {
             // First: more savings is better
             a.savings_bits.cmp(&b.savings_bits)
                 // Then: more fields is better (more complete rule)
                 .then_with(|| a.field_count.cmp(&b.field_count))
+                // Then: longer rule_id_length is better (more specific rules)
+                .then_with(|| a.rule_id_length.cmp(&b.rule_id_length))
+                // Finally: higher rule_id is better (newer/dynamic rules)
+                .then_with(|| a.rule_id.cmp(&b.rule_id))
         })
         .unwrap();
 

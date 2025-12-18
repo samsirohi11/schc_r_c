@@ -12,6 +12,7 @@ pub mod decompressor;
 pub mod packet_builder;
 pub mod tree;
 pub mod tree_display;
+pub mod quic_rule_builder;
 
 // Integration layer
 pub mod streaming_tree;
@@ -36,3 +37,7 @@ pub use streaming_tree::{
 // Re-export decompression types
 pub use decompressor::{decompress_packet, match_rule_id, DecompressedPacket};
 pub use packet_builder::{build_headers, ReconstructedHeaders};
+
+// Re-export QUIC rule builder types
+pub use quic_rule_builder::{QuicRuleBuilder, QuicConnectionInfo, QuicSession};
+pub use parser::QuicContext;

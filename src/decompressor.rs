@@ -102,10 +102,11 @@ pub fn decompress_packet(
     let mut bit_pos = rule.rule_id_length as usize;
     
     // Decompress each field according to its CDA
+    // Pass already-decompressed fields for QUIC CID length lookup
     let mut fields: HashMap<FieldId, FieldValue> = HashMap::new();
     
     for field in &rule.compression {
-        let value = decompress_field(bits, &mut bit_pos, field)?;
+        let value = decompress_field(bits, &mut bit_pos, field, &fields)?;
         fields.insert(field.fid, value);
     }
     
@@ -138,6 +139,7 @@ fn decompress_field(
     bits: &BitSlice<u8, Msb0>,
     bit_pos: &mut usize,
     field: &Field,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
 ) -> Result<FieldValue> {
     match field.cda {
         CompressionAction::NotSent => {
@@ -146,7 +148,8 @@ fn decompress_field(
         }
         CompressionAction::ValueSent => {
             // Read full field value from residue
-            let field_bits = get_field_size_bits(field);
+            // For QUIC CID fields, get length from previously decompressed length field
+            let field_bits = get_field_size_bits_with_context(field, decompressed_fields);
             read_field_value(bits, bit_pos, field_bits, field.fid)
         }
         CompressionAction::MappingSent => {
@@ -312,17 +315,19 @@ fn read_field_value(
 ) -> Result<FieldValue> {
     let n = n_bits as usize;
     
-    // Check if this is an address field that needs bytes
-    let is_address = matches!(fid, 
+    // Check if this is an address/bytes field that needs bytes
+    let is_bytes_field = matches!(fid, 
         FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App |
         FieldId::Ipv6Src | FieldId::Ipv6Dst |
         FieldId::Ipv6SrcPrefix | FieldId::Ipv6DstPrefix |
         FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix |
         FieldId::Ipv6SrcIid | FieldId::Ipv6DstIid |
-        FieldId::Ipv6DevIid | FieldId::Ipv6AppIid
+        FieldId::Ipv6DevIid | FieldId::Ipv6AppIid |
+        // QUIC connection IDs are variable-length bytes
+        FieldId::QuicDcid | FieldId::QuicScid
     );
     
-    if is_address || n > 64 {
+    if is_bytes_field || n > 64 {
         // Read as bytes
         let byte_len = (n + 7) / 8;
         let mut bytes = vec![0u8; byte_len];
@@ -374,6 +379,37 @@ fn get_field_size_bits(field: &Field) -> u16 {
     if let Some(fl) = field.fl {
         return fl;
     }
+    field.fid.default_size_bits().unwrap_or(8)
+}
+
+/// Get field size in bits, using previously decompressed fields for QUIC CID length lookup
+fn get_field_size_bits_with_context(
+    field: &Field,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
+) -> u16 {
+    // Priority: 1. Explicit FL in rule
+    if let Some(fl) = field.fl {
+        return fl;
+    }
+    
+    // 2. For QUIC connection ID fields, look up length from previously decompressed length field
+    match field.fid {
+        FieldId::QuicDcid => {
+            // DCID length is in bytes, convert to bits
+            if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::QuicDcidLen) {
+                return (*len as u16) * 8;
+            }
+        }
+        FieldId::QuicScid => {
+            // SCID length is in bytes, convert to bits
+            if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::QuicScidLen) {
+                return (*len as u16) * 8;
+            }
+        }
+        _ => {}
+    }
+    
+    // 3. FieldId default from JSON
     field.fid.default_size_bits().unwrap_or(8)
 }
 

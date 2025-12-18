@@ -280,6 +280,26 @@
       "length": 32,
       "unit": "bits",
       "description": "QUIC Version field (RFC 9000). Only present in long headers."
+    },
+    "QUIC.DCID_LEN": {
+      "length": 8,
+      "unit": "bits",
+      "description": "Destination Connection ID Length (0-20 bytes). Present in long headers."
+    },
+    "QUIC.DCID": {
+      "length": "DCID_LEN",
+      "unit": "bytes",
+      "description": "Destination Connection ID (0-20 bytes based on DCID_LEN). Variable length."
+    },
+    "QUIC.SCID_LEN": {
+      "length": 8,
+      "unit": "bits",
+      "description": "Source Connection ID Length (0-20 bytes). Only present in long headers."
+    },
+    "QUIC.SCID": {
+      "length": "SCID_LEN",
+      "unit": "bytes",
+      "description": "Source Connection ID (0-20 bytes based on SCID_LEN). Variable length, long headers only."
     }
   }
 }

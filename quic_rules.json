@@ -50,7 +50,11 @@
         "TV": 1,
         "MO": "equal",
         "CDA": "not-sent"
-      }
+      },
+      { "FID": "QUIC.DCID_LEN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.DCID", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.SCID_LEN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.SCID", "MO": "ignore", "CDA": "value-sent" }
     ]
   },
   {
@@ -186,7 +190,11 @@
         "TV": 1,
         "MO": "equal",
         "CDA": "not-sent"
-      }
+      },
+      { "FID": "QUIC.DCID_LEN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.DCID", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.SCID_LEN", "MO": "ignore", "CDA": "value-sent" },
+      { "FID": "QUIC.SCID", "MO": "ignore", "CDA": "value-sent" }
     ]
   }
 ]

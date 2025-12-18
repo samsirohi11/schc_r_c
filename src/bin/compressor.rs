@@ -3,6 +3,9 @@
 //! Runs SCHC compression on packets from a pcap file using streaming tree method.
 
 use schc::{RuleSet, build_tree, compress_packet, decompress_packet, display_tree, Direction};
+use schc::QuicSession;
+use schc::parser::StreamingParser;
+use schc::FieldId;
 use clap::Parser;
 use anyhow::{Context, Result};
 use pcap_file::pcapng::{PcapNgReader, Block};
@@ -35,6 +38,10 @@ struct Args {
     /// Verify compression by decompressing and comparing with original
     #[arg(short = 'v', long, default_value_t = false)]
     verify: bool,
+
+    /// Enable dynamic QUIC rule generation based on learned connection IDs
+    #[arg(long, default_value_t = false)]
+    dynamic_quic_rules: bool,
 }
 
 fn main() -> Result<()> {
@@ -42,17 +49,26 @@ fn main() -> Result<()> {
     
     // Load rules
     println!("Loading rules from: {}", args.rules);
-    let ruleset = RuleSet::from_file(&args.rules)
+    let mut ruleset = RuleSet::from_file(&args.rules)
         .context("Failed to load rules")?;
     println!("Loaded {} rules\n", ruleset.rules.len());
 
     // Build rule tree
     println!("Building rule tree...");
-    let tree = build_tree(&ruleset.rules);
+    let mut tree = build_tree(&ruleset.rules);
     
     if args.debug {
         display_tree(&tree);
     }
+    
+    // Initialize QUIC session for dynamic rule generation
+    // Use rule IDs 240-255 for dynamic rules (8-bit rule IDs)
+    let mut quic_session = if args.dynamic_quic_rules {
+        println!("Dynamic QUIC rule generation enabled");
+        Some(QuicSession::new(240, 250, 8, args.debug))
+    } else {
+        None
+    };
     
     // Open pcapng file
     println!("Opening pcap file: {}", args.pcap);
@@ -63,8 +79,10 @@ fn main() -> Result<()> {
     
     let mut packet_count = 0;
     let mut compressed_count = 0;
+    let mut unmatched_count = 0;
     let mut total_original_bits = 0usize;
     let mut total_compressed_bits = 0usize;
+    let mut unmatched_header_bits = 0usize;
 
     let mut dev_mac: Option<Vec<u8>> = None;
     let mut app_mac: Option<Vec<u8>> = None;
@@ -102,14 +120,55 @@ fn main() -> Result<()> {
                             total_original_bits += compressed.original_header_bits;
                             total_compressed_bits += compressed.compressed_header_bits;
                             
+                            // If dynamic QUIC rules are enabled, try to learn connection IDs
+                            // Use the matched rule as base for new rules
+                            if let Some(ref mut session) = quic_session {
+                                // Parse packet to extract QUIC fields
+                                if let Ok(mut parser) = StreamingParser::new(&packet_data, direction) {
+                                    // Parse QUIC CID fields (they get cached in the parser)
+                                    let _ = parser.parse_field(FieldId::QuicFirstByte);
+                                    let _ = parser.parse_field(FieldId::QuicVersion);
+                                    let _ = parser.parse_field(FieldId::QuicDcidLen);
+                                    let _ = parser.parse_field(FieldId::QuicDcid);
+                                    let _ = parser.parse_field(FieldId::QuicScidLen);
+                                    let _ = parser.parse_field(FieldId::QuicScid);
+                                    
+                                    // Find the base rule that matched this packet
+                                    let base_rule = ruleset.rules.iter()
+                                        .find(|r| r.rule_id == compressed.rule_id && r.rule_id_length == compressed.rule_id_length);
+                                    
+                                    // Update session with learned CIDs, using base rule
+                                    if session.update_from_packet(&parser, base_rule) {
+                                        // New rules were generated! Add them and rebuild tree
+                                        let new_rules = session.take_generated_rules();
+                                        println!("\n[QUIC] Generated/updated {} rules (total unique DCIDs: {})", 
+                                                 new_rules.len(), session.unique_dcid_count());
+                                        for rule in &new_rules {
+                                            println!("  - Rule {}/{}: {}", 
+                                                     rule.rule_id, rule.rule_id_length, 
+                                                     rule.comment.as_deref().unwrap_or("QUIC specific rule"));
+                                        }
+                                        // Remove any existing rules with same ID before adding new ones
+                                        for new_rule in &new_rules {
+                                            ruleset.rules.retain(|r| 
+                                                !(r.rule_id == new_rule.rule_id && r.rule_id_length == new_rule.rule_id_length)
+                                            );
+                                        }
+                                        ruleset.rules.extend(new_rules);
+                                        tree = build_tree(&ruleset.rules);
+                                        println!("[QUIC] Tree rebuilt with {} total rules\n", ruleset.rules.len());
+                                    }
+                                }
+                            }
+                            
                             let savings_bits = compressed.savings_bits();
-                            let savings_bytes = compressed.savings_bytes();
-                            let original_bytes = compressed.original_header_bits as f64 / 8.0;
-                            let compressed_bytes = compressed.compressed_header_bits as f64 / 8.0;
+                            let original_bytes = (compressed.original_header_bits + 7) / 8; 
+                            let compressed_bytes = (compressed.compressed_header_bits + 7) / 8; // Padded to byte boundary
+                            let savings_bytes = original_bytes.saturating_sub(compressed_bytes);
                             
                             if !args.debug {
-                                println!("Packet {}: {:.1} bytes -> {:.1} bytes (Rule: {}/{} - Saved: {:.2} bytes / {} bits, {:.1}%)",
-                                    packet_count,
+                                println!("Packet {}: {} bytes -> {} bytes (Rule: {}/{} - Saved: {} bytes / {} bits, {:.1}%)",
+                                    packet_count
                                     original_bytes,
                                     compressed_bytes,
                                     compressed.rule_id, compressed.rule_id_length,
@@ -124,13 +183,13 @@ fn main() -> Result<()> {
                                 println!("\n{}", "═".repeat(80));
                                 println!("COMPRESSION RESULT");
                                 println!("{}", "═".repeat(80));
-                                println!("  Original header:   {} bits ({:.1} bytes)", 
+                                println!("  Original header:   {} bits ({} bytes)", 
                                          compressed.original_header_bits, original_bytes);
-                                println!("  Compressed header: {} bits ({:.1} bytes)", 
+                                println!("  Compressed header: {} bits ({} bytes, padded to byte boundary)", 
                                          compressed.compressed_header_bits, compressed_bytes);
                                 println!("  Rule used:         {}/{}", 
                                          compressed.rule_id, compressed.rule_id_length);
-                                println!("  Savings:           {} bits ({:.2} bytes, {:.1}%)",
+                                println!("  Savings:           {} bits ({} bytes, {:.1}%)",
                                          savings_bits, savings_bytes,
                                          if compressed.original_header_bits > 0 {
                                              100.0 * savings_bits as f64 / compressed.original_header_bits as f64
@@ -222,9 +281,31 @@ fn main() -> Result<()> {
                                 }
                             }
                         }
-                        Err(e) => {
-                            if args.debug {
-                                eprintln!("Packet {}: No matching rule - {}", packet_count, e);
+                        Err(_e) => {
+                            unmatched_count += 1;
+                            // Estimate header size based on IP version
+                            // For IPv4: 20 + 8 = 28 bytes = 224 bits (IP + UDP)
+                            // For IPv6: 40 + 8 = 48 bytes = 384 bits (IP + UDP)
+                            // For non-IP packets: use packet length minus Ethernet header
+                            let estimated_header_bytes = if packet_data.len() > 14 {
+                                let ip_version = (packet_data[14] >> 4) & 0x0F;
+                                match ip_version {
+                                    6 => 48,  // IPv6 + UDP
+                                    4 => 28,  // IPv4 + UDP
+                                    _ => packet_data.len().saturating_sub(14), // Non-IP: whole packet minus Ethernet
+                                }
+                            } else {
+                                packet_data.len() // Very short packet
+                            };
+                            let header_bits = estimated_header_bytes * 8;
+                            unmatched_header_bits += header_bits;
+                            
+                            if !args.debug {
+                                println!("Packet {}: NO MATCH ({} bytes sent uncompressed)",
+                                         packet_count, estimated_header_bytes);
+                            } else {
+                                eprintln!("Packet {}: No matching rule - {} ({} bytes)", 
+                                          packet_count, _e, estimated_header_bytes);
                             }
                         }
                     }
@@ -249,16 +330,23 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(80));
     println!("Total packets processed:    {}", packet_count);
     println!("Successfully compressed:    {}", compressed_count);
-    println!("Total original header:      {} bits ({:.1} bytes)", 
-             total_original_bits, total_original_bits as f64 / 8.0);
-    println!("Total compressed header:    {} bits ({:.1} bytes)", 
-             total_compressed_bits, total_compressed_bits as f64 / 8.0);
+    println!("Unmatched (sent as-is):     {}", unmatched_count);
+    
+    let total_original_bytes = (total_original_bits + unmatched_header_bits + 7) / 8;
+    let total_compressed_bytes = (total_compressed_bits + 7) / 8;
+    let unmatched_bytes = (unmatched_header_bits + 7) / 8;
+    
+    println!("Total original header:      {} bits ({} bytes)", 
+             total_original_bits + unmatched_header_bits, total_original_bytes);
+    println!("Total compressed header:    {} bits ({} bytes) + {} bytes uncompressed", 
+             total_compressed_bits, total_compressed_bytes, unmatched_bytes);
     
     if total_original_bits > 0 {
         let saved_bits = total_original_bits.saturating_sub(total_compressed_bits);
+        let saved_bytes = total_original_bytes.saturating_sub(total_compressed_bytes + unmatched_bytes);
         let ratio = 100.0 * saved_bits as f64 / total_original_bits as f64;
-        println!("Total bits saved:           {} bits ({:.2} bytes, {:.1}%)", 
-                 saved_bits, saved_bits as f64 / 8.0, ratio);
+        println!("Total bytes saved:          {} bytes ({} bits, {:.1}%)", 
+                 saved_bytes, saved_bits, ratio);
         println!("Compression ratio:          {:.2}:1", 
                  total_original_bits as f64 / total_compressed_bits.max(1) as f64);
     }

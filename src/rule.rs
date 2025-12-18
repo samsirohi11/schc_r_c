@@ -23,12 +23,14 @@ impl RuleValue {
                     // IPv4 address - display as dotted decimal
                     let addr = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
                     addr.to_string()
-                } else if bytes.len() == 8 {
-                    let mut addr_bytes = [0u8; 16];
-                    addr_bytes[0..8].copy_from_slice(bytes);
-                    let addr = Ipv6Addr::from(addr_bytes);
-                    format!("{}/64", addr)
+                } else if bytes.len() == 16 {
+                    // Full IPv6 address
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(bytes);
+                    let addr = Ipv6Addr::from(arr);
+                    addr.to_string()
                 } else {
+                    // All other byte arrays use hex encoding
                     format!("0x{}", hex::encode(bytes))
                 }
             },

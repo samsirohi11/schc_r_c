@@ -64,17 +64,22 @@ pub fn build_headers(
     // Determine if QUIC is present
     let has_quic = fields.contains_key(&FieldId::QuicFirstByte);
     
-    // Calculate QUIC header length
+    // Calculate QUIC header length (dynamically based on connection IDs)
     let quic_len = if has_quic {
         let first_byte = get_field_u8(fields, FieldId::QuicFirstByte).unwrap_or(0);
         let is_long_header = (first_byte & 0x80) != 0;
         if is_long_header {
-            // (just first_byte + version for now)
-            // Long header: first_byte(1) + version(4) = 5 bytes minimum
-            5
+            // Long header: first_byte(1) + version(4) + dcid_len(1) + dcid + scid_len(1) + scid
+            let dcid_len = get_field_u8(fields, FieldId::QuicDcidLen).unwrap_or(0) as usize;
+            let scid_len = get_field_u8(fields, FieldId::QuicScidLen).unwrap_or(0) as usize;
+            1 + 4 + 1 + dcid_len + 1 + scid_len
         } else {
-            // Short header: just first_byte(1)
-            1
+            // Short header: first_byte(1) + dcid
+            let dcid_len = match fields.get(&FieldId::QuicDcid) {
+                Some(FieldValue::Bytes(b)) => b.len(),
+                _ => 0,
+            };
+            1 + dcid_len
         }
     } else {
         0
@@ -477,8 +482,9 @@ fn get_port(fields: &HashMap<FieldId, FieldValue>, direction: Direction, is_sour
 
 /// Build QUIC header from decompressed fields
 ///
-/// Reconstructs the minimal QUIC header fields that are part of the compression
-/// rule (first byte and optionally version for long headers).
+/// Reconstructs the QUIC header fields that are part of the compression
+/// rule. For long headers: first_byte + version + dcid_len + dcid + scid_len + scid
+/// For short headers: first_byte + dcid
 fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     let first_byte = get_field_u8(fields, FieldId::QuicFirstByte).unwrap_or(0);
     let is_long_header = (first_byte & 0x80) != 0;
@@ -488,8 +494,10 @@ fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     // First byte
     header.push(first_byte);
     
-    // For long header, add version (4 bytes)
     if is_long_header {
+        // Long header: first_byte + version + dcid_len + dcid + scid_len + scid
+        
+        // Version (4 bytes)
         if let Some(value) = fields.get(&FieldId::QuicVersion) {
             let version = match value {
                 FieldValue::U32(v) => *v,
@@ -502,6 +510,33 @@ fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
         } else {
             // Default version 1 if not in fields
             header.extend_from_slice(&1u32.to_be_bytes());
+        }
+        
+        // DCID Length (1 byte)
+        let dcid_len = get_field_u8(fields, FieldId::QuicDcidLen).unwrap_or(0);
+        header.push(dcid_len);
+        
+        // DCID (variable)
+        if dcid_len > 0 {
+            if let Some(FieldValue::Bytes(dcid)) = fields.get(&FieldId::QuicDcid) {
+                header.extend_from_slice(dcid);
+            }
+        }
+        
+        // SCID Length (1 byte)
+        let scid_len = get_field_u8(fields, FieldId::QuicScidLen).unwrap_or(0);
+        header.push(scid_len);
+        
+        // SCID (variable)
+        if scid_len > 0 {
+            if let Some(FieldValue::Bytes(scid)) = fields.get(&FieldId::QuicScid) {
+                header.extend_from_slice(scid);
+            }
+        }
+    } else {
+        // Short header: first_byte + dcid (from FL or context)
+        if let Some(FieldValue::Bytes(dcid)) = fields.get(&FieldId::QuicDcid) {
+            header.extend_from_slice(dcid);
         }
     }
     
