@@ -23,7 +23,7 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 | **IPv4** | Version, IHL, DSCP, ECN, Length, ID, Flags, Fragment Offset, TTL, Protocol, Checksum, Source, Destination              |
 | **IPv6** | Version, Traffic Class, Flow Label, Payload Length, Next Header, Hop Limit, Source/Destination (with Prefix/IID split) |
 | **UDP**  | Source Port, Destination Port, Length, Checksum                                                                        |
-| **QUIC** | First Byte, Version, DCID Length, DCID, SCID Length, SCID (with dynamic rule generation)                               |
+| **QUIC** | First Byte, Version, DCID Length, DCID, SCID Length, SCID                                                              |
 
 ### Matching Operators (MO)
 
@@ -92,7 +92,6 @@ cargo run --release --bin compressor -- \
 - `-m, --max-packets <N>` - Limit number of packets to process
 - `--first-packet-direction <UP|DOWN>` - Direction of first packet, default: UP
 - `-v, --verify` - Verify compression by decompressing and comparing
-- `--dynamic-quic-rules` - Enable dynamic QUIC rule generation (learns connection IDs from handshake)
 
 #### Visualize Rule Tree
 
@@ -239,9 +238,7 @@ src/
 ├── tree.rs             # Rule tree structures
 ├── tree_display.rs     # Tree visualization
 ├── streaming_tree.rs   # Integration layer (unified parse+match+compress)
-├── quic_rule_builder.rs # Dynamic QUIC rule generation from learned connection IDs
 ├── build.rs            # Build script that generates FieldId enum from field-context.json
-field-context.json      # Source for field definitions
 └── bin/
     ├── compressor.rs      # CLI compression tool (pcap files)
     ├── live_compressor.rs # Live interface packet capture

@@ -5,9 +5,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pcap_file::pcapng::{Block, PcapNgReader};
-use schc::FieldId;
-use schc::QuicSession;
-use schc::parser::StreamingParser;
 use schc::{Direction, RuleSet, build_tree, compress_packet, decompress_packet, display_tree};
 use std::fs::File;
 
@@ -38,10 +35,6 @@ struct Args {
     /// Verify compression by decompressing and comparing with original
     #[arg(short = 'v', long, default_value_t = false)]
     verify: bool,
-
-    /// Enable dynamic QUIC rule generation based on learned connection IDs
-    #[arg(long, default_value_t = false)]
-    dynamic_quic_rules: bool,
 }
 
 fn main() -> Result<()> {
@@ -49,25 +42,16 @@ fn main() -> Result<()> {
 
     // Load rules
     println!("Loading rules from: {}", args.rules);
-    let mut ruleset = RuleSet::from_file(&args.rules).context("Failed to load rules")?;
+    let ruleset = RuleSet::from_file(&args.rules).context("Failed to load rules")?;
     println!("Loaded {} rules\n", ruleset.rules.len());
 
     // Build rule tree
     println!("Building rule tree...");
-    let mut tree = build_tree(&ruleset.rules);
+    let tree = build_tree(&ruleset.rules);
 
     if args.debug {
         display_tree(&tree);
     }
-
-    // Initialize QUIC session for dynamic rule generation
-    // Use rule IDs 240-255 for dynamic rules (8-bit rule IDs)
-    let mut quic_session = if args.dynamic_quic_rules {
-        println!("Dynamic QUIC rule generation enabled");
-        Some(QuicSession::new(240, 250, 8, args.debug))
-    } else {
-        None
-    };
 
     // Open pcapng file
     println!("Opening pcap file: {}", args.pcap);
@@ -122,77 +106,6 @@ fn main() -> Result<()> {
                             compressed_count += 1;
                             total_original_bits += compressed.original_header_bits;
                             total_compressed_bits += compressed.compressed_header_bits;
-
-                            // If dynamic QUIC rules are enabled, try to learn connection IDs
-                            // Use the matched rule as base for new rules
-                            if let Some(ref mut session) = quic_session {
-                                // Parse packet to extract QUIC fields
-                                if let Ok(mut parser) =
-                                    StreamingParser::new(&packet_data, direction)
-                                {
-                                    // Parse QUIC CID fields (they get cached in the parser)
-                                    let _ = parser.parse_field(FieldId::QuicFirstByte);
-                                    let _ = parser.parse_field(FieldId::QuicVersion);
-                                    let _ = parser.parse_field(FieldId::QuicDcidLen);
-                                    let _ = parser.parse_field(FieldId::QuicDcid);
-                                    let _ = parser.parse_field(FieldId::QuicScidLen);
-                                    let _ = parser.parse_field(FieldId::QuicScid);
-
-                                    // Find the base rule that matched this packet
-                                    let base_rule = ruleset.rules.iter().find(|r| {
-                                        r.rule_id == compressed.rule_id
-                                            && r.rule_id_length == compressed.rule_id_length
-                                    });
-
-                                    // Update session with learned CIDs, using base rule
-                                    if session.update_from_packet(&parser, base_rule) {
-                                        let new_rules = session.take_generated_rules();
-                                        let deprecated_rules = session.take_deprecated_rule_ids();
-
-                                        println!(
-                                            "\n[QUIC CORECONF] Created {} new rule(s) (total unique DCIDs: {})",
-                                            new_rules.len(),
-                                            session.unique_dcid_count()
-                                        );
-
-                                        for rule in &new_rules {
-                                            println!(
-                                                "  + NEW Rule {}/{}: {}",
-                                                rule.rule_id,
-                                                rule.rule_id_length,
-                                                rule.comment
-                                                    .as_deref()
-                                                    .unwrap_or("QUIC specific rule")
-                                            );
-                                        }
-
-                                        if !deprecated_rules.is_empty() {
-                                            println!(
-                                                "[QUIC CORECONF] Removing {} deprecated rule(s):",
-                                                deprecated_rules.len()
-                                            );
-                                            for (rule_id, rule_id_length) in &deprecated_rules {
-                                                println!(
-                                                    "  - Deprecated Rule {}/{}",
-                                                    rule_id, rule_id_length
-                                                );
-                                                ruleset.rules.retain(|r| {
-                                                    !(r.rule_id == *rule_id
-                                                        && r.rule_id_length == *rule_id_length)
-                                                });
-                                            }
-                                        }
-
-                                        // Add new rules (they have unique IDs, no conflicts)
-                                        ruleset.rules.extend(new_rules);
-                                        tree = build_tree(&ruleset.rules);
-                                        println!(
-                                            "[QUIC CORECONF] Tree rebuilt with {} total rules\n",
-                                            ruleset.rules.len()
-                                        );
-                                    }
-                                }
-                            }
 
                             let savings_bits = compressed.savings_bits();
                             let original_bytes = (compressed.original_header_bits + 7) / 8;
