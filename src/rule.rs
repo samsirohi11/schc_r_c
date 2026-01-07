@@ -243,7 +243,7 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
                         .and_then(|p| p.parse::<usize>().ok())
                         .unwrap_or(64);
                     
-                    let prefix_bytes_len = (prefix_len + 7) / 8;
+                    let prefix_bytes_len = prefix_len.div_ceil(8);
                     let prefix_bytes: Vec<u8> = bytes[..prefix_bytes_len].to_vec();
                     Some(RuleValue::Bytes(prefix_bytes))
                 } else {

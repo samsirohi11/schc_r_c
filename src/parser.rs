@@ -3,12 +3,12 @@
 //! On-demand field extraction from raw packets. Fields are parsed lazily
 //! during tree traversal to enable early pruning when mismatches are detected.
 
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
 use pnet::packet::ethernet::EthernetPacket;
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
+use std::collections::HashMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
@@ -53,7 +53,7 @@ impl FieldValue {
             FieldValue::Bytes(v) => hex::encode(v),
         }
     }
-    
+
     /// Get size of this field value in bits
     pub fn size_bits(&self) -> u16 {
         match self {
@@ -187,10 +187,19 @@ impl<'a> StreamingParser<'a> {
 
         match fid {
             // IPv4 Fields
-            FieldId::Ipv4Ver | FieldId::Ipv4Ihl | FieldId::Ipv4Dscp | FieldId::Ipv4Ecn |
-            FieldId::Ipv4Len | FieldId::Ipv4Id | FieldId::Ipv4Flags | FieldId::Ipv4FragOff |
-            FieldId::Ipv4Ttl | FieldId::Ipv4Proto | FieldId::Ipv4Chksum | 
-            FieldId::Ipv4Src | FieldId::Ipv4Dst => {
+            FieldId::Ipv4Ver
+            | FieldId::Ipv4Ihl
+            | FieldId::Ipv4Dscp
+            | FieldId::Ipv4Ecn
+            | FieldId::Ipv4Len
+            | FieldId::Ipv4Id
+            | FieldId::Ipv4Flags
+            | FieldId::Ipv4FragOff
+            | FieldId::Ipv4Ttl
+            | FieldId::Ipv4Proto
+            | FieldId::Ipv4Chksum
+            | FieldId::Ipv4Src
+            | FieldId::Ipv4Dst => {
                 if self.layer != ProtocolLayer::Ipv4 {
                     return Ok(None);
                 }
@@ -212,9 +221,18 @@ impl<'a> StreamingParser<'a> {
             }
 
             // IPv6 Fields
-            FieldId::Ipv6Ver | FieldId::Ipv6Tc | FieldId::Ipv6Fl | FieldId::Ipv6Len |
-            FieldId::Ipv6Nxt | FieldId::Ipv6HopLmt | FieldId::Ipv6Src | FieldId::Ipv6Dst |
-            FieldId::Ipv6SrcPrefix | FieldId::Ipv6SrcIid | FieldId::Ipv6DstPrefix | FieldId::Ipv6DstIid => {
+            FieldId::Ipv6Ver
+            | FieldId::Ipv6Tc
+            | FieldId::Ipv6Fl
+            | FieldId::Ipv6Len
+            | FieldId::Ipv6Nxt
+            | FieldId::Ipv6HopLmt
+            | FieldId::Ipv6Src
+            | FieldId::Ipv6Dst
+            | FieldId::Ipv6SrcPrefix
+            | FieldId::Ipv6SrcIid
+            | FieldId::Ipv6DstPrefix
+            | FieldId::Ipv6DstIid => {
                 if self.layer != ProtocolLayer::Ipv6 {
                     return Ok(None);
                 }
@@ -258,14 +276,15 @@ impl<'a> StreamingParser<'a> {
             }
 
             // QUIC Fields
-            FieldId::QuicFirstByte | FieldId::QuicVersion |
-            FieldId::QuicDcidLen | FieldId::QuicDcid |
-            FieldId::QuicScidLen | FieldId::QuicScid => {
-                self.extract_quic_field(fid)
-            }
+            FieldId::QuicFirstByte
+            | FieldId::QuicVersion
+            | FieldId::QuicDcidLen
+            | FieldId::QuicDcid
+            | FieldId::QuicScidLen
+            | FieldId::QuicScid => self.extract_quic_field(fid),
 
             // Unsupported fields (COAP, ICMPv6, IP.VER, etc.) - generated from JSON but not yet implemented
-            _ => Ok(None)
+            _ => Ok(None),
         }
     }
 
@@ -325,8 +344,14 @@ impl<'a> StreamingParser<'a> {
             FieldId::Ipv6SrcIid => {
                 let src_bytes = ipv6.get_source().octets();
                 let iid = u64::from_be_bytes([
-                    src_bytes[8], src_bytes[9], src_bytes[10], src_bytes[11],
-                    src_bytes[12], src_bytes[13], src_bytes[14], src_bytes[15],
+                    src_bytes[8],
+                    src_bytes[9],
+                    src_bytes[10],
+                    src_bytes[11],
+                    src_bytes[12],
+                    src_bytes[13],
+                    src_bytes[14],
+                    src_bytes[15],
                 ]);
                 FieldValue::U64(iid)
             }
@@ -337,8 +362,14 @@ impl<'a> StreamingParser<'a> {
             FieldId::Ipv6DstIid => {
                 let dst_bytes = ipv6.get_destination().octets();
                 let iid = u64::from_be_bytes([
-                    dst_bytes[8], dst_bytes[9], dst_bytes[10], dst_bytes[11],
-                    dst_bytes[12], dst_bytes[13], dst_bytes[14], dst_bytes[15],
+                    dst_bytes[8],
+                    dst_bytes[9],
+                    dst_bytes[10],
+                    dst_bytes[11],
+                    dst_bytes[12],
+                    dst_bytes[13],
+                    dst_bytes[14],
+                    dst_bytes[15],
                 ]);
                 FieldValue::U64(iid)
             }
@@ -350,7 +381,7 @@ impl<'a> StreamingParser<'a> {
 
     fn extract_udp_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let udp_start = self.get_udp_start()?;
-        
+
         if udp_start >= self.raw.len() {
             return Ok(None);
         }
@@ -419,30 +450,24 @@ impl<'a> StreamingParser<'a> {
     /// Returns None if UDP ports don't indicate QUIC traffic
     fn get_quic_start(&mut self) -> Result<Option<usize>> {
         let udp_start = self.get_udp_start()?;
-        
+
         // Check if this is QUIC traffic by examining UDP ports
         // Reuse already-parsed UDP port fields instead of reading raw bytes again
         // QUIC typically uses port 443 (HTTPS over QUIC) or 4433 (alternate QUIC port)
-        
+
         // Parse UDP source and destination ports if not already cached
-        let src_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpSrcPort) {
-            match val {
-                FieldValue::U16(p) => *p,
-                _ => return Ok(None),
-            }
+        let src_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpSrcPort) {
+            *p
         } else {
             return Ok(None);
         };
 
-        let dst_port = if let Ok(Some(val)) = self.parse_field(FieldId::UdpDstPort) {
-            match val {
-                FieldValue::U16(p) => *p,
-                _ => return Ok(None),
-            }
+        let dst_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpDstPort) {
+            *p
         } else {
             return Ok(None);
         };
-        
+
         // Only parse QUIC if either port is a known QUIC port
         // 443 = HTTPS/QUIC, 4433 = alternate QUIC, 8080 = quinn-workbench default
         const QUIC_PORTS: [u16; 3] = [443, 4433, 8080];
@@ -450,14 +475,14 @@ impl<'a> StreamingParser<'a> {
         if !is_quic {
             return Ok(None);
         }
-        
+
         Ok(Some(udp_start + 8)) // UDP header is 8 bytes
     }
 
     /// Extract QUIC header fields
-    /// 
+    ///
     /// QUIC is only parsed when UDP port is 443, 4433, or 8080.
-    /// 
+    ///
     /// QUIC header structure (RFC 9000):
     /// - Long Header (first bit = 1):
     ///   - First byte (8 bits): Header Form (1) + Fixed Bit + Long Packet Type + Type-Specific Bits
@@ -467,17 +492,16 @@ impl<'a> StreamingParser<'a> {
     ///   - SCID Length (8 bits): 0-20
     ///   - SCID (0-160 bits): variable based on SCID Length
     ///   - ... (type-specific payload)
-    /// 
+    ///
     /// - Short Header (first bit = 0):
     ///   - First byte (8 bits): Header Form (0) + Fixed Bit + Spin Bit + Reserved + Key Phase + PN Length
     ///   - DCID (variable): length NOT encoded, must be known from connection context
     ///   - ... (packet number)
-     
     fn extract_quic_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let quic_start = match self.get_quic_start() {
             Ok(Some(start)) => start,
             Ok(None) => return Ok(None), // Not a QUIC packet (wrong ports)
-            Err(_) => return Ok(None), // Not a UDP packet
+            Err(_) => return Ok(None),   // Not a UDP packet
         };
 
         if quic_start >= self.raw.len() {
@@ -493,14 +517,12 @@ impl<'a> StreamingParser<'a> {
         let first_byte = quic_data[0];
         let header_form = (first_byte >> 7) & 0x01; // Most significant bit: 1 = long, 0 = short
         let is_long_header = header_form == 1;
-        
+
         // Cache header form in context
         self.quic_ctx.is_long_header = Some(is_long_header);
 
         match fid {
-            FieldId::QuicFirstByte => {
-                Ok(Some(FieldValue::U8(first_byte)))
-            }
+            FieldId::QuicFirstByte => Ok(Some(FieldValue::U8(first_byte))),
             FieldId::QuicVersion => {
                 if !is_long_header {
                     // Short header has no version field
@@ -512,12 +534,8 @@ impl<'a> StreamingParser<'a> {
                     return Ok(None);
                 }
 
-                let version = u32::from_be_bytes([
-                    quic_data[1],
-                    quic_data[2],
-                    quic_data[3],
-                    quic_data[4],
-                ]);
+                let version =
+                    u32::from_be_bytes([quic_data[1], quic_data[2], quic_data[3], quic_data[4]]);
                 Ok(Some(FieldValue::U32(version)))
             }
             FieldId::QuicDcidLen => {
@@ -525,12 +543,12 @@ impl<'a> StreamingParser<'a> {
                     // Short header doesn't have DCID length encoded
                     return Ok(None);
                 }
-                
+
                 // DCID Length is at byte 5 (after first_byte + 4 bytes version)
                 if quic_data.len() < 6 {
                     return Ok(None);
                 }
-                
+
                 let dcid_len = quic_data[5];
                 // Cache the DCID length for subsequent DCID parsing
                 self.quic_ctx.dcid_len = Some(dcid_len);
@@ -551,15 +569,15 @@ impl<'a> StreamingParser<'a> {
                             len
                         }
                     };
-                    
+
                     // DCID starts at byte 6
                     let dcid_start = 6;
                     let dcid_end = dcid_start + dcid_len;
-                    
+
                     if quic_data.len() < dcid_end {
                         return Ok(None);
                     }
-                    
+
                     // Return empty bytes for 0-length DCID (valid case)
                     let dcid = quic_data[dcid_start..dcid_end].to_vec();
                     Ok(Some(FieldValue::Bytes(dcid)))
@@ -573,14 +591,14 @@ impl<'a> StreamingParser<'a> {
                             return Ok(None);
                         }
                     };
-                    
+
                     let dcid_start = 1;
                     let dcid_end = dcid_start + dcid_len;
-                    
+
                     if quic_data.len() < dcid_end {
                         return Ok(None);
                     }
-                    
+
                     let dcid = quic_data[dcid_start..dcid_end].to_vec();
                     Ok(Some(FieldValue::Bytes(dcid)))
                 }
@@ -590,7 +608,7 @@ impl<'a> StreamingParser<'a> {
                     // Short header has no SCID
                     return Ok(None);
                 }
-                
+
                 // SCID_LEN is after first_byte(1) + version(4) + dcid_len(1) + dcid(variable)
                 let dcid_len = match self.quic_ctx.dcid_len {
                     Some(len) => len as usize,
@@ -604,12 +622,12 @@ impl<'a> StreamingParser<'a> {
                         len
                     }
                 };
-                
+
                 let scid_len_offset = 6 + dcid_len;
                 if quic_data.len() <= scid_len_offset {
                     return Ok(None);
                 }
-                
+
                 let scid_len = quic_data[scid_len_offset];
                 self.quic_ctx.scid_len = Some(scid_len);
                 Ok(Some(FieldValue::U8(scid_len)))
@@ -619,7 +637,7 @@ impl<'a> StreamingParser<'a> {
                     // Short header has no SCID
                     return Ok(None);
                 }
-                
+
                 // First ensure DCID_LEN is known
                 let dcid_len = match self.quic_ctx.dcid_len {
                     Some(len) => len as usize,
@@ -632,7 +650,7 @@ impl<'a> StreamingParser<'a> {
                         len
                     }
                 };
-                
+
                 // Then ensure SCID_LEN is known
                 let scid_len_offset = 6 + dcid_len;
                 let scid_len = match self.quic_ctx.scid_len {
@@ -646,15 +664,15 @@ impl<'a> StreamingParser<'a> {
                         len
                     }
                 };
-                
+
                 // SCID starts after SCID_LEN
                 let scid_start = scid_len_offset + 1;
                 let scid_end = scid_start + scid_len;
-                
+
                 if quic_data.len() < scid_end {
                     return Ok(None);
                 }
-                
+
                 // Return empty bytes for 0-length SCID (valid case)
                 let scid = quic_data[scid_start..scid_end].to_vec();
                 Ok(Some(FieldValue::Bytes(scid)))
@@ -662,13 +680,13 @@ impl<'a> StreamingParser<'a> {
             _ => Ok(None),
         }
     }
-    
+
     /// Set the expected DCID length for short header QUIC packets
-    /// 
+    ///
     /// For short headers, the DCID length is not encoded in the packet.
     /// This method should be called with the DCID length learned from
     /// the QUIC handshake (e.g., from long header packets).
-    /// 
+    ///
     /// This also clears any cached DCID value so it will be reparsed
     /// with the new expected length.
     pub fn set_quic_dcid_len(&mut self, len: u8) {
@@ -679,7 +697,7 @@ impl<'a> StreamingParser<'a> {
             self.parsed_fields.remove(&FieldId::QuicDcid);
         }
     }
-    
+
     /// Get the current QUIC context (for connection tracking)
     pub fn quic_context(&self) -> &QuicContext {
         &self.quic_ctx
@@ -691,7 +709,10 @@ impl<'a> StreamingParser<'a> {
 // =============================================================================
 
 /// Parse and return all packet fields for debugging
-pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Vec<(FieldId, String)>> {
+pub fn parse_packet_fields(
+    raw_packet: &[u8],
+    direction: Direction,
+) -> Result<Vec<(FieldId, String)>> {
     let mut parser = StreamingParser::new(raw_packet, direction)?;
     let mut fields = Vec::new();
 
@@ -704,27 +725,54 @@ pub fn parse_packet_fields(raw_packet: &[u8], direction: Direction) -> Result<Ve
 
     let field_ids: Vec<FieldId> = if ip_version == 6 {
         vec![
-            FieldId::Ipv6Ver, FieldId::Ipv6Tc, FieldId::Ipv6Fl,
-            FieldId::Ipv6Len, FieldId::Ipv6Nxt, FieldId::Ipv6HopLmt,
-            FieldId::Ipv6SrcPrefix, FieldId::Ipv6SrcIid,
-            FieldId::Ipv6DstPrefix, FieldId::Ipv6DstIid,
-            FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
+            FieldId::Ipv6Ver,
+            FieldId::Ipv6Tc,
+            FieldId::Ipv6Fl,
+            FieldId::Ipv6Len,
+            FieldId::Ipv6Nxt,
+            FieldId::Ipv6HopLmt,
+            FieldId::Ipv6SrcPrefix,
+            FieldId::Ipv6SrcIid,
+            FieldId::Ipv6DstPrefix,
+            FieldId::Ipv6DstIid,
+            FieldId::UdpSrcPort,
+            FieldId::UdpDstPort,
+            FieldId::UdpLen,
+            FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
-            FieldId::QuicFirstByte, FieldId::QuicVersion,
-            FieldId::QuicDcidLen, FieldId::QuicDcid,
-            FieldId::QuicScidLen, FieldId::QuicScid,
+            FieldId::QuicFirstByte,
+            FieldId::QuicVersion,
+            FieldId::QuicDcidLen,
+            FieldId::QuicDcid,
+            FieldId::QuicScidLen,
+            FieldId::QuicScid,
         ]
     } else if ip_version == 4 {
         vec![
-            FieldId::Ipv4Ver, FieldId::Ipv4Ihl, FieldId::Ipv4Dscp, FieldId::Ipv4Ecn,
-            FieldId::Ipv4Len, FieldId::Ipv4Id, FieldId::Ipv4Flags, FieldId::Ipv4FragOff,
-            FieldId::Ipv4Ttl, FieldId::Ipv4Proto, FieldId::Ipv4Chksum,
-            FieldId::Ipv4Src, FieldId::Ipv4Dst,
-            FieldId::UdpSrcPort, FieldId::UdpDstPort, FieldId::UdpLen, FieldId::UdpCksum,
+            FieldId::Ipv4Ver,
+            FieldId::Ipv4Ihl,
+            FieldId::Ipv4Dscp,
+            FieldId::Ipv4Ecn,
+            FieldId::Ipv4Len,
+            FieldId::Ipv4Id,
+            FieldId::Ipv4Flags,
+            FieldId::Ipv4FragOff,
+            FieldId::Ipv4Ttl,
+            FieldId::Ipv4Proto,
+            FieldId::Ipv4Chksum,
+            FieldId::Ipv4Src,
+            FieldId::Ipv4Dst,
+            FieldId::UdpSrcPort,
+            FieldId::UdpDstPort,
+            FieldId::UdpLen,
+            FieldId::UdpCksum,
             // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
-            FieldId::QuicFirstByte, FieldId::QuicVersion,
-            FieldId::QuicDcidLen, FieldId::QuicDcid,
-            FieldId::QuicScidLen, FieldId::QuicScid,
+            FieldId::QuicFirstByte,
+            FieldId::QuicVersion,
+            FieldId::QuicDcidLen,
+            FieldId::QuicDcid,
+            FieldId::QuicScidLen,
+            FieldId::QuicScid,
         ]
     } else {
         vec![]
@@ -770,15 +818,21 @@ mod tests {
         assert_eq!(FieldValue::U8(42).as_string(), "42");
         assert_eq!(FieldValue::U16(1234).as_string(), "1234");
         assert_eq!(FieldValue::U32(0xDEADBEEF).as_string(), "3735928559");
-        assert_eq!(FieldValue::U64(0x123456789ABCDEF0).as_string(), "1311768467463790320");
-        
+        assert_eq!(
+            FieldValue::U64(0x123456789ABCDEF0).as_string(),
+            "1311768467463790320"
+        );
+
         let ipv4: Ipv4Addr = "192.168.1.1".parse().unwrap();
         assert_eq!(FieldValue::Ipv4(ipv4).as_string(), "192.168.1.1");
-        
+
         let ipv6: Ipv6Addr = "2001:db8::1".parse().unwrap();
         assert_eq!(FieldValue::Ipv6(ipv6).as_string(), "2001:db8::1");
-        
-        assert_eq!(FieldValue::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF]).as_string(), "deadbeef");
+
+        assert_eq!(
+            FieldValue::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF]).as_string(),
+            "deadbeef"
+        );
     }
 
     #[test]
@@ -819,26 +873,26 @@ mod tests {
     fn create_ipv4_udp_packet() -> Vec<u8> {
         // Ethernet header (14 bytes)
         let mut packet = vec![
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
-            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
-            0x08, 0x00,                          // EtherType (IPv4)
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, // Src MAC
+            0x08, 0x00, // EtherType (IPv4)
         ];
-        
+
         // IPv4 header (20 bytes, no options)
         let ipv4_header = vec![
-            0x45,       // Version (4) + IHL (5)
-            0x00,       // DSCP + ECN
+            0x45, // Version (4) + IHL (5)
+            0x00, // DSCP + ECN
             0x00, 0x1C, // Total length (28 = 20 + 8)
             0x12, 0x34, // Identification
             0x40, 0x00, // Flags (Don't Fragment) + Fragment Offset
-            0x40,       // TTL (64)
-            0x11,       // Protocol (UDP = 17)
+            0x40, // TTL (64)
+            0x11, // Protocol (UDP = 17)
             0x00, 0x00, // Checksum (0 for test)
             0xC0, 0xA8, 0x01, 0x64, // Src IP: 192.168.1.100
             0xC0, 0xA8, 0x01, 0x01, // Dst IP: 192.168.1.1
         ];
         packet.extend(ipv4_header);
-        
+
         // UDP header (8 bytes)
         let udp_header = vec![
             0x13, 0xC4, // Src Port: 5060
@@ -847,7 +901,7 @@ mod tests {
             0x00, 0x00, // Checksum
         ];
         packet.extend(udp_header);
-        
+
         packet
     }
 
@@ -855,7 +909,7 @@ mod tests {
     fn test_parse_ipv4_version() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let version = parser.parse_field(FieldId::Ipv4Ver).unwrap().unwrap();
         match version {
             FieldValue::U8(v) => assert_eq!(*v, 4),
@@ -867,7 +921,7 @@ mod tests {
     fn test_parse_ipv4_ttl() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let ttl = parser.parse_field(FieldId::Ipv4Ttl).unwrap().unwrap();
         match ttl {
             FieldValue::U8(v) => assert_eq!(*v, 64),
@@ -879,13 +933,15 @@ mod tests {
     fn test_parse_ipv4_addresses() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let src = parser.parse_field(FieldId::Ipv4Src).unwrap().unwrap();
         match src {
-            FieldValue::Ipv4(addr) => assert_eq!(*addr, "192.168.1.100".parse::<Ipv4Addr>().unwrap()),
+            FieldValue::Ipv4(addr) => {
+                assert_eq!(*addr, "192.168.1.100".parse::<Ipv4Addr>().unwrap())
+            }
             _ => panic!("Expected Ipv4 for source address"),
         }
-        
+
         let dst = parser.parse_field(FieldId::Ipv4Dst).unwrap().unwrap();
         match dst {
             FieldValue::Ipv4(addr) => assert_eq!(*addr, "192.168.1.1".parse::<Ipv4Addr>().unwrap()),
@@ -897,13 +953,13 @@ mod tests {
     fn test_parse_udp_ports_ipv4() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let src_port = parser.parse_field(FieldId::UdpSrcPort).unwrap().unwrap();
         match src_port {
             FieldValue::U16(v) => assert_eq!(*v, 5060),
             _ => panic!("Expected U16 for UDP source port"),
         }
-        
+
         let dst_port = parser.parse_field(FieldId::UdpDstPort).unwrap().unwrap();
         match dst_port {
             FieldValue::U16(v) => assert_eq!(*v, 80),
@@ -919,26 +975,25 @@ mod tests {
     fn create_ipv6_udp_packet() -> Vec<u8> {
         // Ethernet header (14 bytes)
         let mut packet = vec![
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
-            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
-            0x86, 0xDD,                          // EtherType (IPv6)
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, // Src MAC
+            0x86, 0xDD, // EtherType (IPv6)
         ];
-        
+
         // IPv6 header (40 bytes)
         let ipv6_header = vec![
             0x60, 0x12, 0x34, 0x56, // Version (6) + TC (0x01) + Flow Label (0x23456)
-            0x00, 0x08,             // Payload Length (8 bytes = UDP header)
-            0x11,                   // Next Header (UDP = 17)
-            0x40,                   // Hop Limit (64)
+            0x00, 0x08, // Payload Length (8 bytes = UDP header)
+            0x11, // Next Header (UDP = 17)
+            0x40, // Hop Limit (64)
             // Source: 2001:db8:1234:5678:9abc:def0:1234:5678
-            0x20, 0x01, 0x0d, 0xb8, 0x12, 0x34, 0x56, 0x78,
-            0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
-            // Destination: 2001:db8:abcd:ef01:2345:6789:abcd:ef01
-            0x20, 0x01, 0x0d, 0xb8, 0xab, 0xcd, 0xef, 0x01,
-            0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01,
+            0x20, 0x01, 0x0d, 0xb8, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34,
+            0x56, 0x78, // Destination: 2001:db8:abcd:ef01:2345:6789:abcd:ef01
+            0x20, 0x01, 0x0d, 0xb8, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+            0xef, 0x01,
         ];
         packet.extend(ipv6_header);
-        
+
         // UDP header (8 bytes)
         let udp_header = vec![
             0x1F, 0x90, // Src Port: 8080
@@ -947,7 +1002,7 @@ mod tests {
             0x00, 0x00, // Checksum
         ];
         packet.extend(udp_header);
-        
+
         packet
     }
 
@@ -955,7 +1010,7 @@ mod tests {
     fn test_parse_ipv6_version() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let version = parser.parse_field(FieldId::Ipv6Ver).unwrap().unwrap();
         match version {
             FieldValue::U8(v) => assert_eq!(*v, 6),
@@ -967,7 +1022,7 @@ mod tests {
     fn test_parse_ipv6_hop_limit() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let hop = parser.parse_field(FieldId::Ipv6HopLmt).unwrap().unwrap();
         match hop {
             FieldValue::U8(v) => assert_eq!(*v, 64),
@@ -979,7 +1034,7 @@ mod tests {
     fn test_parse_ipv6_prefix() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let prefix = parser.parse_field(FieldId::Ipv6SrcPrefix).unwrap().unwrap();
         match prefix {
             FieldValue::Bytes(b) => {
@@ -994,7 +1049,7 @@ mod tests {
     fn test_parse_ipv6_iid() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let iid = parser.parse_field(FieldId::Ipv6SrcIid).unwrap().unwrap();
         match iid {
             FieldValue::U64(v) => {
@@ -1009,13 +1064,13 @@ mod tests {
     fn test_parse_udp_ports_ipv6() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let src_port = parser.parse_field(FieldId::UdpSrcPort).unwrap().unwrap();
         match src_port {
             FieldValue::U16(v) => assert_eq!(*v, 8080),
             _ => panic!("Expected U16 for UDP source port"),
         }
-        
+
         let dst_port = parser.parse_field(FieldId::UdpDstPort).unwrap().unwrap();
         match dst_port {
             FieldValue::U16(v) => assert_eq!(*v, 443),
@@ -1031,11 +1086,11 @@ mod tests {
     fn test_field_caching() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // First parse
         let _ = parser.parse_field(FieldId::Ipv4Ttl).unwrap();
         assert!(parser.parsed_fields.contains_key(&FieldId::Ipv4Ttl));
-        
+
         // Second parse should use cache
         let ttl = parser.parse_field(FieldId::Ipv4Ttl).unwrap().unwrap();
         match ttl {
@@ -1052,14 +1107,14 @@ mod tests {
     fn test_directional_udp_ports_up() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // In UP direction: DEV = source, APP = destination
         let dev_port = parser.parse_field(FieldId::UdpDevPort).unwrap().unwrap();
         match dev_port {
             FieldValue::U16(v) => assert_eq!(*v, 5060), // Source port
             _ => panic!("Expected source port for DEV in UP direction"),
         }
-        
+
         let app_port = parser.parse_field(FieldId::UdpAppPort).unwrap().unwrap();
         match app_port {
             FieldValue::U16(v) => assert_eq!(*v, 80), // Destination port
@@ -1071,14 +1126,14 @@ mod tests {
     fn test_directional_udp_ports_down() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Down).unwrap();
-        
+
         // In DOWN direction: DEV = destination, APP = source
         let dev_port = parser.parse_field(FieldId::UdpDevPort).unwrap().unwrap();
         match dev_port {
             FieldValue::U16(v) => assert_eq!(*v, 80), // Destination port
             _ => panic!("Expected destination port for DEV in DOWN direction"),
         }
-        
+
         let app_port = parser.parse_field(FieldId::UdpAppPort).unwrap().unwrap();
         match app_port {
             FieldValue::U16(v) => assert_eq!(*v, 5060), // Source port
@@ -1094,7 +1149,7 @@ mod tests {
     fn test_ipv6_field_on_ipv4_packet() {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Should return None, not an error
         let result = parser.parse_field(FieldId::Ipv6Ver).unwrap();
         assert!(result.is_none());
@@ -1104,7 +1159,7 @@ mod tests {
     fn test_ipv4_field_on_ipv6_packet() {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Should return None, not an error
         let result = parser.parse_field(FieldId::Ipv4Ver).unwrap();
         assert!(result.is_none());
@@ -1118,26 +1173,25 @@ mod tests {
     fn create_ipv6_quic_long_header_packet() -> Vec<u8> {
         // Ethernet header (14 bytes)
         let mut packet = vec![
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
-            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
-            0x86, 0xDD,                          // EtherType (IPv6)
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, // Src MAC
+            0x86, 0xDD, // EtherType (IPv6)
         ];
-        
+
         // IPv6 header (40 bytes)
         let ipv6_header = vec![
             0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
-            0x00, 0x15,             // Payload Length (21 bytes = 8 UDP + 13 QUIC)
-            0x11,                   // Next Header (UDP = 17)
-            0x40,                   // Hop Limit (64)
+            0x00, 0x15, // Payload Length (21 bytes = 8 UDP + 13 QUIC)
+            0x11, // Next Header (UDP = 17)
+            0x40, // Hop Limit (64)
             // Source: 2001:db8::1
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            // Destination: 2001:db8::2
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01, // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
         ];
         packet.extend(ipv6_header);
-        
+
         // UDP header (8 bytes) - destination port 443 (QUIC)
         let udp_header = vec![
             0x1F, 0x90, // Src Port: 8080
@@ -1146,18 +1200,18 @@ mod tests {
             0x00, 0x00, // Checksum
         ];
         packet.extend(udp_header);
-        
+
         // QUIC Long Header (first byte + 4 byte version + more)
         // First byte: 1xxxxxxx (header form = 1, long header)
         let quic_header = vec![
-            0xC3,                   // Long header: 1100 0011 (form=1, fixed=1, type=00, reserved)
+            0xC3, // Long header: 1100 0011 (form=1, fixed=1, type=00, reserved)
             0x00, 0x00, 0x00, 0x01, // Version: 1 (QUIC version 1)
-            0x05,                   // DCID Length: 5
+            0x05, // DCID Length: 5
             0x01, 0x02, 0x03, 0x04, 0x05, // DCID
-            0x00,                   // SCID Length: 0
+            0x00, // SCID Length: 0
         ];
         packet.extend(quic_header);
-        
+
         packet
     }
 
@@ -1165,26 +1219,25 @@ mod tests {
     fn create_ipv6_quic_short_header_packet() -> Vec<u8> {
         // Ethernet header (14 bytes)
         let mut packet = vec![
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
-            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
-            0x86, 0xDD,                          // EtherType (IPv6)
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, // Src MAC
+            0x86, 0xDD, // EtherType (IPv6)
         ];
-        
+
         // IPv6 header (40 bytes)
         let ipv6_header = vec![
             0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
-            0x00, 0x10,             // Payload Length (16 bytes = 8 UDP + 8 QUIC)
-            0x11,                   // Next Header (UDP = 17)
-            0x40,                   // Hop Limit (64)
+            0x00, 0x10, // Payload Length (16 bytes = 8 UDP + 8 QUIC)
+            0x11, // Next Header (UDP = 17)
+            0x40, // Hop Limit (64)
             // Source: 2001:db8::1
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            // Destination: 2001:db8::2
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01, // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
         ];
         packet.extend(ipv6_header);
-        
+
         // UDP header (8 bytes) - source port 443 (QUIC)
         let udp_header = vec![
             0x01, 0xBB, // Src Port: 443 (QUIC)
@@ -1193,16 +1246,16 @@ mod tests {
             0x00, 0x00, // Checksum
         ];
         packet.extend(udp_header);
-        
+
         // QUIC Short Header (first byte + DCID + packet number)
         // First byte: 0xxxxxxx (header form = 0, short header)
         let quic_header = vec![
-            0x43,                   // Short header: 0100 0011 (form=0, fixed=1, spin=0, etc.)
+            0x43, // Short header: 0100 0011 (form=0, fixed=1, spin=0, etc.)
             0x01, 0x02, 0x03, 0x04, 0x05, // DCID (connection ID)
-            0x00, 0x01,             // Packet number (simplified)
+            0x00, 0x01, // Packet number (simplified)
         ];
         packet.extend(quic_header);
-        
+
         packet
     }
 
@@ -1210,16 +1263,16 @@ mod tests {
     fn test_quic_long_header_first_byte() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
         assert!(first_byte.is_some(), "Should have QUIC first byte");
-        
+
         match first_byte.unwrap() {
             FieldValue::U8(v) => {
                 assert_eq!(*v, 0xC3, "First byte should be 0xC3");
                 // Verify MSB (header form) is 1 for long header
                 assert_eq!((*v >> 7) & 0x01, 1, "MSB should be 1 for long header");
-            },
+            }
             _ => panic!("Expected U8 for QUIC first byte"),
         }
     }
@@ -1228,10 +1281,10 @@ mod tests {
     fn test_quic_long_header_version() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let version = parser.parse_field(FieldId::QuicVersion).unwrap();
         assert!(version.is_some(), "Long header should have version");
-        
+
         match version.unwrap() {
             FieldValue::U32(v) => assert_eq!(*v, 1, "Version should be 1"),
             _ => panic!("Expected U32 for QUIC version"),
@@ -1242,16 +1295,16 @@ mod tests {
     fn test_quic_short_header_first_byte() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
         assert!(first_byte.is_some(), "Should have QUIC first byte");
-        
+
         match first_byte.unwrap() {
             FieldValue::U8(v) => {
                 assert_eq!(*v, 0x43, "First byte should be 0x43");
                 // Verify MSB (header form) is 0 for short header
                 assert_eq!((*v >> 7) & 0x01, 0, "MSB should be 0 for short header");
-            },
+            }
             _ => panic!("Expected U8 for QUIC first byte"),
         }
     }
@@ -1260,9 +1313,12 @@ mod tests {
     fn test_quic_short_header_no_version() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let version = parser.parse_field(FieldId::QuicVersion).unwrap();
-        assert!(version.is_none(), "Short header should NOT have version field");
+        assert!(
+            version.is_none(),
+            "Short header should NOT have version field"
+        );
     }
 
     #[test]
@@ -1270,29 +1326,38 @@ mod tests {
         // Standard UDP packet (port 8080, not 443/4433) should not parse QUIC fields
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
-        assert!(first_byte.is_none(), "Non-QUIC UDP packet should not have QUIC fields");
-        
+        assert!(
+            first_byte.is_none(),
+            "Non-QUIC UDP packet should not have QUIC fields"
+        );
+
         let version = parser.parse_field(FieldId::QuicVersion).unwrap();
-        assert!(version.is_none(), "Non-QUIC UDP packet should not have QUIC version");
+        assert!(
+            version.is_none(),
+            "Non-QUIC UDP packet should not have QUIC version"
+        );
     }
 
     #[test]
     fn test_quic_port_4433() {
         // Create packet with port 4433 instead of 443
         let mut packet = create_ipv6_quic_long_header_packet();
-        
+
         // Modify destination port to 4433 (0x1151)
         // UDP header starts at offset 14 (ethernet) + 40 (IPv6) = 54
         // Destination port is at bytes 54+2 and 54+3
         packet[56] = 0x11;
         packet[57] = 0x51;
-        
+
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
-        assert!(first_byte.is_some(), "Port 4433 should be recognized as QUIC");
+        assert!(
+            first_byte.is_some(),
+            "Port 4433 should be recognized as QUIC"
+        );
     }
 
     // =========================================================================
@@ -1303,10 +1368,10 @@ mod tests {
     fn test_quic_long_header_dcid_len() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap();
         assert!(dcid_len.is_some(), "Long header should have DCID length");
-        
+
         match dcid_len.unwrap() {
             FieldValue::U8(v) => assert_eq!(*v, 5, "DCID length should be 5"),
             _ => panic!("Expected U8 for QUIC DCID length"),
@@ -1317,15 +1382,19 @@ mod tests {
     fn test_quic_long_header_dcid() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
         assert!(dcid.is_some(), "Long header should have DCID");
-        
+
         match dcid.unwrap() {
             FieldValue::Bytes(v) => {
                 assert_eq!(v.len(), 5, "DCID should be 5 bytes");
-                assert_eq!(*v, vec![0x01, 0x02, 0x03, 0x04, 0x05], "DCID content mismatch");
-            },
+                assert_eq!(
+                    *v,
+                    vec![0x01, 0x02, 0x03, 0x04, 0x05],
+                    "DCID content mismatch"
+                );
+            }
             _ => panic!("Expected Bytes for QUIC DCID"),
         }
     }
@@ -1334,10 +1403,10 @@ mod tests {
     fn test_quic_long_header_scid_len() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap();
         assert!(scid_len.is_some(), "Long header should have SCID length");
-        
+
         match scid_len.unwrap() {
             FieldValue::U8(v) => assert_eq!(*v, 0, "SCID length should be 0"),
             _ => panic!("Expected U8 for QUIC SCID length"),
@@ -1348,14 +1417,17 @@ mod tests {
     fn test_quic_long_header_scid_zero_length() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         let scid = parser.parse_field(FieldId::QuicScid).unwrap();
-        assert!(scid.is_some(), "Long header should have SCID (even if empty)");
-        
+        assert!(
+            scid.is_some(),
+            "Long header should have SCID (even if empty)"
+        );
+
         match scid.unwrap() {
             FieldValue::Bytes(v) => {
                 assert_eq!(v.len(), 0, "SCID should be 0 bytes (empty)");
-            },
+            }
             _ => panic!("Expected Bytes for QUIC SCID"),
         }
     }
@@ -1364,38 +1436,51 @@ mod tests {
     fn test_quic_short_header_no_dcid_len() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Short header doesn't encode DCID length
         let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap();
-        assert!(dcid_len.is_none(), "Short header should NOT have DCID length encoded");
+        assert!(
+            dcid_len.is_none(),
+            "Short header should NOT have DCID length encoded"
+        );
     }
 
     #[test]
     fn test_quic_short_header_dcid_without_context() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Without setting DCID length context, DCID shouldn't parse
         let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
-        assert!(dcid.is_none(), "Short header DCID should return None without context");
+        assert!(
+            dcid.is_none(),
+            "Short header DCID should return None without context"
+        );
     }
 
     #[test]
     fn test_quic_short_header_dcid_with_context() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Set DCID length from connection context (e.g., from handshake)
         parser.set_quic_dcid_len(5);
-        
+
         let dcid = parser.parse_field(FieldId::QuicDcid).unwrap();
-        assert!(dcid.is_some(), "Short header DCID should parse with context");
-        
+        assert!(
+            dcid.is_some(),
+            "Short header DCID should parse with context"
+        );
+
         match dcid.unwrap() {
             FieldValue::Bytes(v) => {
                 assert_eq!(v.len(), 5, "DCID should be 5 bytes");
-                assert_eq!(*v, vec![0x01, 0x02, 0x03, 0x04, 0x05], "DCID content mismatch");
-            },
+                assert_eq!(
+                    *v,
+                    vec![0x01, 0x02, 0x03, 0x04, 0x05],
+                    "DCID content mismatch"
+                );
+            }
             _ => panic!("Expected Bytes for QUIC DCID"),
         }
     }
@@ -1404,11 +1489,14 @@ mod tests {
     fn test_quic_short_header_no_scid() {
         let packet = create_ipv6_quic_short_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Short header doesn't have SCID
         let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap();
-        assert!(scid_len.is_none(), "Short header should NOT have SCID length");
-        
+        assert!(
+            scid_len.is_none(),
+            "Short header should NOT have SCID length"
+        );
+
         let scid = parser.parse_field(FieldId::QuicScid).unwrap();
         assert!(scid.is_none(), "Short header should NOT have SCID");
     }
@@ -1417,26 +1505,25 @@ mod tests {
     fn create_quic_long_header_with_both_cids() -> Vec<u8> {
         // Ethernet header (14 bytes)
         let mut packet = vec![
-            0x00, 0x11, 0x22, 0x33, 0x44, 0x55,  // Dst MAC
-            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB,  // Src MAC
-            0x86, 0xDD,                          // EtherType (IPv6)
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Dst MAC
+            0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, // Src MAC
+            0x86, 0xDD, // EtherType (IPv6)
         ];
-        
+
         // IPv6 header (40 bytes)
         let ipv6_header = vec![
             0x60, 0x00, 0x00, 0x00, // Version (6) + TC + Flow Label
-            0x00, 0x1C,             // Payload Length (28 bytes = 8 UDP + 20 QUIC)
-            0x11,                   // Next Header (UDP = 17)
-            0x40,                   // Hop Limit (64)
+            0x00, 0x1C, // Payload Length (28 bytes = 8 UDP + 20 QUIC)
+            0x11, // Next Header (UDP = 17)
+            0x40, // Hop Limit (64)
             // Source: 2001:db8::1
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            // Destination: 2001:db8::2
-            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01, // Destination: 2001:db8::2
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
         ];
         packet.extend(ipv6_header);
-        
+
         // UDP header (8 bytes)
         let udp_header = vec![
             0x1F, 0x90, // Src Port: 8080
@@ -1445,18 +1532,18 @@ mod tests {
             0x00, 0x00, // Checksum
         ];
         packet.extend(udp_header);
-        
+
         // QUIC Long Header with both DCID and SCID
         let quic_header = vec![
-            0xC3,                   // Long header: 1100 0011
+            0xC3, // Long header: 1100 0011
             0x00, 0x00, 0x00, 0x01, // Version: 1
-            0x04,                   // DCID Length: 4
+            0x04, // DCID Length: 4
             0xAA, 0xBB, 0xCC, 0xDD, // DCID: 4 bytes
-            0x08,                   // SCID Length: 8
+            0x08, // SCID Length: 8
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // SCID: 8 bytes
         ];
         packet.extend(quic_header);
-        
+
         packet
     }
 
@@ -1464,34 +1551,38 @@ mod tests {
     fn test_quic_long_header_both_cids() {
         let packet = create_quic_long_header_with_both_cids();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Parse DCID
         let dcid_len = parser.parse_field(FieldId::QuicDcidLen).unwrap().unwrap();
         match dcid_len {
             FieldValue::U8(v) => assert_eq!(*v, 4, "DCID length should be 4"),
             _ => panic!("Expected U8 for DCID length"),
         }
-        
+
         let dcid = parser.parse_field(FieldId::QuicDcid).unwrap().unwrap();
         match dcid {
             FieldValue::Bytes(v) => {
                 assert_eq!(*v, vec![0xAA, 0xBB, 0xCC, 0xDD], "DCID content mismatch");
-            },
+            }
             _ => panic!("Expected Bytes for DCID"),
         }
-        
+
         // Parse SCID
         let scid_len = parser.parse_field(FieldId::QuicScidLen).unwrap().unwrap();
         match scid_len {
             FieldValue::U8(v) => assert_eq!(*v, 8, "SCID length should be 8"),
             _ => panic!("Expected U8 for SCID length"),
         }
-        
+
         let scid = parser.parse_field(FieldId::QuicScid).unwrap().unwrap();
         match scid {
             FieldValue::Bytes(v) => {
-                assert_eq!(*v, vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88], "SCID content mismatch");
-            },
+                assert_eq!(
+                    *v,
+                    vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+                    "SCID content mismatch"
+                );
+            }
             _ => panic!("Expected Bytes for SCID"),
         }
     }
@@ -1500,12 +1591,11 @@ mod tests {
     fn test_quic_context_caches_dcid_len() {
         let packet = create_ipv6_quic_long_header_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
-        
+
         // Parse DCID - this should cache DCID_LEN
         let _ = parser.parse_field(FieldId::QuicDcid).unwrap();
-        
+
         // Verify DCID length was cached in context
         assert_eq!(parser.quic_context().dcid_len, Some(5));
     }
 }
-

@@ -131,8 +131,8 @@ fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue
             send_field_value(bits, field, value);
         }
         CompressionAction::MappingSent => {
-            if let Some(ref tv) = field.tv {
-                if let serde_json::Value::Array(arr) = tv {
+            if let Some(ref tv) = field.tv
+                && let serde_json::Value::Array(arr) = tv {
                     let num_items = arr.len();
                     let bits_needed = if num_items <= 1 {
                         0
@@ -152,7 +152,6 @@ fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue
                         }
                     }
                 }
-            }
         }
         CompressionAction::Lsb(_) => {
             let msb_bits = field.mo_val.unwrap_or(0);
@@ -182,17 +181,17 @@ fn send_field_value(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldVal
             FieldValue::U32(v) => send_n_bits(bits, *v as u64, n_bits),
             FieldValue::U64(v) => send_n_bits(bits, *v, n_bits),
             FieldValue::Bytes(v) => {
-                let byte_len = ((n_bits + 7) / 8) as usize;
+                let byte_len = n_bits.div_ceil(8) as usize;
                 let bytes_to_send = &v[..byte_len.min(v.len())];
                 bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(bytes_to_send));
             },
             FieldValue::Ipv4(v) => {
-                let byte_len = ((n_bits + 7) / 8) as usize;
+                let byte_len = n_bits.div_ceil(8) as usize;
                 let bytes = v.octets();
                 bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(&bytes[..byte_len.min(4)]));
             },
             FieldValue::Ipv6(v) => {
-                let byte_len = ((n_bits + 7) / 8) as usize;
+                let byte_len = n_bits.div_ceil(8) as usize;
                 let bytes = v.octets();
                 bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(&bytes[..byte_len.min(16)]));
             },

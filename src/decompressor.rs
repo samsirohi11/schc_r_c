@@ -329,7 +329,7 @@ fn read_field_value(
     
     if is_bytes_field || n > 64 {
         // Read as bytes
-        let byte_len = (n + 7) / 8;
+        let byte_len = n.div_ceil(8);
         let mut bytes = vec![0u8; byte_len];
         
         for i in 0..n {

@@ -72,7 +72,7 @@ pub fn compress_packet(
         .unwrap();
 
     // Extract original header bytes for display
-    let header_bytes = (best.original_bits + 7) / 8;
+    let header_bytes = best.original_bits.div_ceil(8);
     let original_header_data = if header_bytes > 0 && raw_packet.len() >= parser.ip_start() + header_bytes {
         raw_packet[parser.ip_start()..parser.ip_start() + header_bytes].to_vec()
     } else {
@@ -106,8 +106,8 @@ fn traverse_and_compress(
     let indent = "  ".repeat(depth);
 
     if node.is_leaf {
-        if let (Some(rule_id), Some(_rule_id_length)) = (node.rule_id, node.rule_id_length) {
-            if let Some(rule) = rules.iter().find(|r| r.rule_id == rule_id) {
+        if let (Some(rule_id), Some(_rule_id_length)) = (node.rule_id, node.rule_id_length)
+            && let Some(rule) = rules.iter().find(|r| r.rule_id == rule_id) {
                 // Compress using collected path
                 let result = compress_with_rule(rule, parser);
                 
@@ -134,7 +134,6 @@ fn traverse_and_compress(
 
                 matches.push(result);
             }
-        }
         return;
     }
 

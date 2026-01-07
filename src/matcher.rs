@@ -75,11 +75,10 @@ pub fn msb_match(pv: &FieldValue, tv: &RuleValue, bits: u8, fid: FieldId) -> boo
 pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> Option<(bool, Option<FieldValue>)> {
     // For QUIC.DCID on short headers, set the expected length from the rule's target value
     // This allows us to parse the correct number of bytes for matching
-    if info.fid == FieldId::QuicDcid {
-        if let Some(RuleValue::Bytes(tv_bytes)) = &info.tv {
+    if info.fid == FieldId::QuicDcid
+        && let Some(RuleValue::Bytes(tv_bytes)) = &info.tv {
             parser.set_quic_dcid_len(tv_bytes.len() as u8);
         }
-    }
     
     let packet_value = match parser.parse_field(info.fid) {
         Ok(Some(v)) => v.clone(),

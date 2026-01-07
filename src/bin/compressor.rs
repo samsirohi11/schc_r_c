@@ -108,8 +108,8 @@ fn main() -> Result<()> {
                             total_compressed_bits += compressed.compressed_header_bits;
 
                             let savings_bits = compressed.savings_bits();
-                            let original_bytes = (compressed.original_header_bits + 7) / 8;
-                            let compressed_bytes = (compressed.compressed_header_bits + 7) / 8; // Padded to byte boundary
+                            let original_bytes = compressed.original_header_bits.div_ceil(8);
+                            let compressed_bytes = compressed.compressed_header_bits.div_ceil(8); // Padded to byte boundary
                             let savings_bytes = original_bytes.saturating_sub(compressed_bytes);
 
                             if !args.debug {
@@ -325,9 +325,9 @@ fn main() -> Result<()> {
     println!("Successfully compressed:    {}", compressed_count);
     println!("Unmatched (sent as-is):     {}", unmatched_count);
 
-    let total_original_bytes = (total_original_bits + unmatched_header_bits + 7) / 8;
-    let total_compressed_bytes = (total_compressed_bits + 7) / 8;
-    let unmatched_bytes = (unmatched_header_bits + 7) / 8;
+    let total_original_bytes = (total_original_bits + unmatched_header_bits).div_ceil(8);
+    let total_compressed_bytes = total_compressed_bits.div_ceil(8);
+    let unmatched_bytes = unmatched_header_bits.div_ceil(8);
 
     println!(
         "Total original header:      {} bits ({} bytes)",
@@ -401,17 +401,15 @@ fn determine_direction(
             }
         }
         d
-    } else {
-        if let Some(src) = &src_mac {
-            if Some(src) == dev_mac.as_ref() {
-                Direction::Up
-            } else if Some(src) == app_mac.as_ref() {
-                Direction::Down
-            } else {
-                Direction::Up // Default
-            }
-        } else {
+    } else if let Some(src) = &src_mac {
+        if Some(src) == dev_mac.as_ref() {
             Direction::Up
+        } else if Some(src) == app_mac.as_ref() {
+            Direction::Down
+        } else {
+            Direction::Up // Default
         }
+    } else {
+        Direction::Up
     }
 }
