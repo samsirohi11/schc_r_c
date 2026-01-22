@@ -95,6 +95,19 @@ pub struct QuicContext {
 }
 
 // =============================================================================
+// CoAP Context
+// =============================================================================
+
+/// CoAP parsing context to track token length and option state
+#[derive(Debug, Clone, Default)]
+pub struct CoapContext {
+    /// Token Length (TKL) cached from first 4 bits of first byte (0-8)
+    pub tkl: Option<u8>,
+    /// Cumulative option number (for delta encoding)
+    pub current_option_num: u16,
+}
+
+// =============================================================================
 // Streaming Parser
 // =============================================================================
 
@@ -108,6 +121,8 @@ pub struct StreamingParser<'a> {
     pub(crate) parsed_fields: HashMap<FieldId, FieldValue>,
     /// QUIC context for tracking connection ID lengths
     quic_ctx: QuicContext,
+    /// CoAP context for tracking token length and options
+    coap_ctx: CoapContext,
 }
 
 impl<'a> StreamingParser<'a> {
@@ -146,6 +161,7 @@ impl<'a> StreamingParser<'a> {
             direction,
             parsed_fields: HashMap::new(),
             quic_ctx: QuicContext::default(),
+            coap_ctx: CoapContext::default(),
         })
     }
 
@@ -283,7 +299,15 @@ impl<'a> StreamingParser<'a> {
             | FieldId::QuicScidLen
             | FieldId::QuicScid => self.extract_quic_field(fid),
 
-            // Unsupported fields (COAP, ICMPv6, IP.VER, etc.) - generated from JSON but not yet implemented
+            // CoAP Fields
+            FieldId::CoapVer
+            | FieldId::CoapType
+            | FieldId::CoapTkl
+            | FieldId::CoapCode
+            | FieldId::CoapMid
+            | FieldId::CoapToken => self.extract_coap_field(fid),
+
+            // Unsupported fields (ICMPv6, IP.VER, etc.) - generated from JSON but not yet implemented
             _ => Ok(None),
         }
     }
@@ -444,6 +468,25 @@ impl<'a> StreamingParser<'a> {
     pub fn header_length(&mut self) -> Result<usize> {
         let udp_start = self.get_udp_start()?;
         Ok(udp_start + 8 - 14) // Subtract ethernet header (14 bytes) for actual IP+UDP header
+    }
+
+    /// Get the payload start offset (after all protocol headers)
+    /// This returns the absolute offset in the raw packet where the payload begins
+    pub fn payload_start(&mut self) -> Result<usize> {
+        // For UDP, payload starts right after the 8-byte UDP header
+        let udp_start = self.get_udp_start()?;
+        Ok(udp_start + 8)
+    }
+
+    /// Get the payload bytes from the packet
+    /// Returns the data after all protocol headers (IP + transport)
+    pub fn payload(&mut self) -> Result<&[u8]> {
+        let payload_start = self.payload_start()?;
+        if payload_start <= self.raw.len() {
+            Ok(&self.raw[payload_start..])
+        } else {
+            Ok(&[])
+        }
     }
 
     /// Get the QUIC header start offset (after UDP header)
@@ -676,6 +719,106 @@ impl<'a> StreamingParser<'a> {
                 // Return empty bytes for 0-length SCID (valid case)
                 let scid = quic_data[scid_start..scid_end].to_vec();
                 Ok(Some(FieldValue::Bytes(scid)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Get the CoAP start offset (after UDP header on ports 5683/5684)
+    fn get_coap_start(&mut self) -> Result<Option<usize>> {
+        let udp_start = self.get_udp_start()?;
+
+        // Check if this is CoAP traffic by examining UDP ports
+        // CoAP typically uses port 5683 (unsecured) or 5684 (DTLS)
+        let src_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpSrcPort) {
+            *p
+        } else {
+            return Ok(None);
+        };
+
+        let dst_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpDstPort) {
+            *p
+        } else {
+            return Ok(None);
+        };
+
+        // Only parse CoAP if either port is a known CoAP port
+        const COAP_PORTS: [u16; 2] = [5683, 5684];
+        let is_coap = COAP_PORTS.contains(&src_port) || COAP_PORTS.contains(&dst_port);
+        if !is_coap {
+            return Ok(None);
+        }
+
+        Ok(Some(udp_start + 8)) // UDP header is 8 bytes
+    }
+
+    /// Extract CoAP header fields
+    ///
+    /// CoAP header structure (RFC 7252):
+    /// ```text
+    ///  0                   1                   2                   3
+    ///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |Ver| T |  TKL  |      Code     |          Message ID           |
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |   Token (if any, TKL bytes) ...
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |   Options (if any) ...
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |1 1 1 1 1 1 1 1|    Payload (if any) ...
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// ```
+    fn extract_coap_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
+        let coap_start = match self.get_coap_start() {
+            Ok(Some(start)) => start,
+            Ok(None) => return Ok(None), // Not a CoAP packet (wrong ports)
+            Err(_) => return Ok(None),   // Not a UDP packet
+        };
+
+        if coap_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        let coap_data = &self.raw[coap_start..];
+        if coap_data.len() < 4 {
+            // CoAP header requires at least 4 bytes
+            return Ok(None);
+        }
+
+        // First byte: Ver (2b) | T (2b) | TKL (4b)
+        let first_byte = coap_data[0];
+        let version = (first_byte >> 6) & 0x03;
+        let msg_type = (first_byte >> 4) & 0x03;
+        let tkl = first_byte & 0x0F;
+
+        // Cache TKL for token parsing
+        self.coap_ctx.tkl = Some(tkl);
+
+        // Second byte: Code
+        let code = coap_data[1];
+
+        // Third and fourth bytes: Message ID
+        let mid = u16::from_be_bytes([coap_data[2], coap_data[3]]);
+
+        match fid {
+            FieldId::CoapVer => Ok(Some(FieldValue::U8(version))),
+            FieldId::CoapType => Ok(Some(FieldValue::U8(msg_type))),
+            FieldId::CoapTkl => Ok(Some(FieldValue::U8(tkl))),
+            FieldId::CoapCode => Ok(Some(FieldValue::U8(code))),
+            FieldId::CoapMid => Ok(Some(FieldValue::U16(mid))),
+            FieldId::CoapToken => {
+                // Token starts at byte 4 and has TKL bytes
+                let tkl_val = self.coap_ctx.tkl.unwrap_or(0) as usize;
+                if tkl_val == 0 {
+                    return Ok(Some(FieldValue::Bytes(vec![])));
+                }
+                let token_start = 4;
+                let token_end = token_start + tkl_val;
+                if coap_data.len() < token_end {
+                    return Ok(None);
+                }
+                let token = coap_data[token_start..token_end].to_vec();
+                Ok(Some(FieldValue::Bytes(token)))
             }
             _ => Ok(None),
         }
