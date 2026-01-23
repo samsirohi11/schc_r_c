@@ -16,7 +16,7 @@ use crate::field_id::FieldId;
 use crate::rule::{Rule, MatchingOperator, CompressionAction};
 
 // Re-export core types from submodules
-pub use crate::parser::{Direction, FieldValue, StreamingParser, parse_packet_fields, display_packet_fields};
+pub use crate::parser::{Direction, FieldValue, StreamingParser, LinkLayer, parse_packet_fields, display_packet_fields};
 pub use crate::tree::{TreeNode, BranchKey, BranchInfo, Branch, build_tree, END_MARKER, find_rule_ids_in_branch};
 pub use crate::tree_display::display_tree;
 pub use crate::compressor::{CompressedPacket, CompressionResult, FieldCompressionDetail, compress_with_rule};
@@ -40,7 +40,22 @@ pub fn compress_packet(
     rules: &[Rule],
     debug: bool,
 ) -> Result<CompressedPacket> {
-    let mut parser = StreamingParser::new(raw_packet, direction)?;
+    compress_packet_with_link_layer(tree, raw_packet, direction, rules, debug, LinkLayer::Ethernet)
+}
+
+/// Compress a packet with a specified link layer type
+///
+/// Use this when processing packets without Ethernet headers (e.g., raw IP packets
+/// from TUN devices, LPWAN frames, or packets with different link layer types).
+pub fn compress_packet_with_link_layer(
+    tree: &TreeNode,
+    raw_packet: &[u8],
+    direction: Direction,
+    rules: &[Rule],
+    debug: bool,
+    link_layer: LinkLayer,
+) -> Result<CompressedPacket> {
+    let mut parser = StreamingParser::with_link_layer(raw_packet, direction, link_layer)?;
     
     let mut matches: Vec<CompressionResult> = Vec::new();
 
@@ -120,7 +135,7 @@ fn traverse_and_compress(
                             CompressionAction::NotSent => "not-sent",
                             CompressionAction::ValueSent => "value-sent",
                             CompressionAction::MappingSent => "mapping-sent",
-                            CompressionAction::Lsb(_) => "LSB",
+                            CompressionAction::Lsb => "LSB",
                             CompressionAction::Compute => "compute",
                         };
                         println!("{}   {} ({}): {}b -> {}b = {}b saved",

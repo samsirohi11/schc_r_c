@@ -18,12 +18,14 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 
 ### Supported Protocols
 
-| Protocol | Fields                                                                                                                 |
-| -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **IPv4** | Version, IHL, DSCP, ECN, Length, ID, Flags, Fragment Offset, TTL, Protocol, Checksum, Source, Destination              |
-| **IPv6** | Version, Traffic Class, Flow Label, Payload Length, Next Header, Hop Limit, Source/Destination (with Prefix/IID split) |
-| **UDP**  | Source Port, Destination Port, Length, Checksum                                                                        |
-| **QUIC** | First Byte, Version, DCID Length, DCID, SCID Length, SCID                                                              |
+| Protocol   | Fields                                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **IPv4**   | Version, IHL, DSCP, ECN, Length, ID, Flags, Fragment Offset, TTL, Protocol, Checksum, Source, Destination              |
+| **IPv6**   | Version, Traffic Class, Flow Label, Payload Length, Next Header, Hop Limit, Source/Destination (with Prefix/IID split) |
+| **UDP**    | Source Port, Destination Port, Length, Checksum                                                                        |
+| **CoAP**   | Version, Type, Token Length, Code, Message ID, Token                                                                   |
+| **ICMPv6** | Type, Code, Checksum                                                                                                   |
+| **QUIC**   | First Byte, Version, DCID Length, DCID, SCID Length, SCID                                                              |
 
 ### Matching Operators (MO)
 
@@ -51,6 +53,53 @@ Supports direction-aware field identifiers for bidirectional communication:
 - `IPV6.DEV_PREFIX` / `IPV6.APP_PREFIX` - Device and Application prefixes
 - `IPV6.DEV_IID` / `IPV6.APP_IID` - Interface Identifiers
 - `UDP.DEV_PORT` / `UDP.APP_PORT` - Ports mapped by direction
+
+### Direction Indicator (DI) per Field
+
+Per RFC 8724, individual fields can specify a Direction Indicator to control when rules apply:
+
+| DI Value | Description                                     |
+| -------- | ----------------------------------------------- |
+| `"up"`   | Field rule applies to uplink only (DEV → APP)   |
+| `"down"` | Field rule applies to downlink only (APP → DEV) |
+| `"bi"`   | Field rule applies bidirectionally (default)    |
+
+Example with DI:
+
+```json
+{
+  "FID": "UDP.SRC_PORT",
+  "DI": "up",
+  "TV": 5683,
+  "MO": "equal",
+  "CDA": "not-sent"
+}
+```
+
+### Link Layer Configuration
+
+The parser supports configurable link layer handling for different packet sources:
+
+| Link Layer  | Description                                |
+| ----------- | ------------------------------------------ |
+| `None`      | Raw IP packets (no link layer header)      |
+| `Ethernet`  | Standard 14-byte Ethernet header (default) |
+| `Custom(n)` | Custom link layer with n-byte header       |
+
+Use `compress_packet_with_link_layer()` for non-Ethernet packets.
+
+### MO/CDA Validation
+
+Rules are validated per RFC 8724 Section 7.3 at load time:
+
+| MO              | Valid CDA(s)            | Requirements      |
+| --------------- | ----------------------- | ----------------- |
+| `equal`         | `not-sent`              | TV required       |
+| `ignore`        | `value-sent`, `compute` | -                 |
+| `MSB`           | `LSB`                   | TV required       |
+| `match-mapping` | `mapping-sent`          | Array TV required |
+
+Invalid combinations are rejected with descriptive error messages.
 
 ## Installation
 
@@ -215,6 +264,7 @@ Rules are defined in JSON format following the SCHC RFC 8724 specification. For 
 | -------- | --------------------------------------------------- | ----------------------------------- |
 | `FID`    | Field Identifier (e.g., `IPV6.VER`, `UDP.SRC_PORT`) | ✓                                   |
 | `FL`     | Field Length in bits                                | Optional (uses default)             |
+| `DI`     | Direction Indicator (`"up"`, `"down"`, `"bi"`)      | Optional (default: `"bi"`)          |
 | `TV`     | Target Value for matching                           | For `equal`, `MSB`, `match-mapping` |
 | `MO`     | Matching Operator                                   | ✓                                   |
 | `MO.val` | MO parameter (e.g., MSB bit count)                  | For `MSB`                           |

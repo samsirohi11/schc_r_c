@@ -5,6 +5,7 @@ use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::error::Result;
 use crate::field_id::FieldId;
+use crate::parser::Direction;
 
 /// Parsed rule value types
 #[derive(Debug, Clone, PartialEq)]
@@ -69,15 +70,23 @@ pub struct Field {
 
     #[serde(rename = "FL")]
     pub fl: Option<u16>,
-    
+
+    /// Direction Indicator (RFC 8724): "up", "down", or "bi" (bidirectional)
+    /// None or "bi" means the rule applies in both directions
+    #[serde(rename = "DI")]
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_di")]
+    #[serde(serialize_with = "serialize_di")]
+    pub di: Option<Direction>,
+
     #[serde(rename = "TV")]
     pub tv: Option<serde_json::Value>,
-    
+
     #[serde(rename = "MO")]
     #[serde(deserialize_with = "deserialize_mo")]
     #[serde(serialize_with = "serialize_mo")]
     pub mo: MatchingOperator,
-    
+
     #[serde(rename = "CDA")]
     #[serde(deserialize_with = "deserialize_cda")]
     #[serde(serialize_with = "serialize_cda")]
@@ -92,18 +101,21 @@ pub struct Field {
 
 impl Field {
     /// Parse target value and apply mo_val to MSB operator.
-    /// Returns an error if MO.val exceeds the field length.
+    /// Returns an error if MO.val exceeds the field length or if MO/CDA combination is invalid.
     pub fn parse_tv(&mut self) -> crate::error::Result<()> {
+        // Validate MO/CDA combination per RFC 8724
+        self.validate_cda_mo()?;
+
         // Apply mo_val to MSB operator
         if let MatchingOperator::Msb(_) = self.mo {
             let mo_val = self.mo_val.unwrap_or(0);
             self.mo = MatchingOperator::Msb(mo_val);
-            
+
             // Get the field length (either explicit FL or default from FieldId)
             let field_length = self.fl
                 .or_else(|| self.fid.default_size_bits())
                 .unwrap_or(0);
-            
+
             // Validate that MO.val doesn't exceed the field length
             if mo_val as u16 > field_length {
                 return Err(crate::error::SchcError::RuleValidation(format!(
@@ -112,7 +124,7 @@ impl Field {
                 )));
             }
         }
-        
+
         self.parsed_tv = match (&self.mo, &self.tv) {
             (MatchingOperator::Equal, Some(tv_json)) |
             (MatchingOperator::Msb(_), Some(tv_json)) => {
@@ -130,8 +142,72 @@ impl Field {
             },
             _ => None
         };
-        
+
         Ok(())
+    }
+
+    /// Validate MO/CDA combination per RFC 8724 Section 7.3
+    ///
+    /// Valid combinations:
+    /// - `equal` → `not-sent` (TV required)
+    /// - `ignore` → `value-sent` or `compute`
+    /// - `MSB` → `LSB` (TV required for MSB portion)
+    /// - `match-mapping` → `mapping-sent` (array TV required)
+    fn validate_cda_mo(&self) -> crate::error::Result<()> {
+        match (&self.mo, &self.cda) {
+            // equal → not-sent (TV required)
+            (MatchingOperator::Equal, CompressionAction::NotSent) => {
+                if self.tv.is_none() {
+                    return Err(crate::error::SchcError::RuleValidation(format!(
+                        "Field {}: MO 'equal' with CDA 'not-sent' requires a Target Value (TV)",
+                        self.fid
+                    )));
+                }
+                Ok(())
+            }
+            // ignore → value-sent or compute (TV should not be present for ignore)
+            (MatchingOperator::Ignore, CompressionAction::ValueSent) |
+            (MatchingOperator::Ignore, CompressionAction::Compute) => Ok(()),
+            // MSB → LSB (TV required)
+            (MatchingOperator::Msb(_), CompressionAction::Lsb) => {
+                if self.tv.is_none() {
+                    return Err(crate::error::SchcError::RuleValidation(format!(
+                        "Field {}: MO 'MSB' with CDA 'LSB' requires a Target Value (TV)",
+                        self.fid
+                    )));
+                }
+                Ok(())
+            }
+            // match-mapping → mapping-sent (array TV required)
+            (MatchingOperator::MatchMapping, CompressionAction::MappingSent) => {
+                match &self.tv {
+                    Some(serde_json::Value::Array(arr)) if !arr.is_empty() => Ok(()),
+                    Some(serde_json::Value::Array(_)) => {
+                        Err(crate::error::SchcError::RuleValidation(format!(
+                            "Field {}: MO 'match-mapping' requires a non-empty array TV",
+                            self.fid
+                        )))
+                    }
+                    _ => {
+                        Err(crate::error::SchcError::RuleValidation(format!(
+                            "Field {}: MO 'match-mapping' with CDA 'mapping-sent' requires an array Target Value (TV)",
+                            self.fid
+                        )))
+                    }
+                }
+            }
+            // Allow some additional common valid combinations
+            (MatchingOperator::Equal, CompressionAction::ValueSent) => Ok(()), // Send value even if equal
+            (MatchingOperator::Ignore, CompressionAction::NotSent) => Ok(()), // Ignore and don't send (field not needed)
+            // Invalid combinations
+            (mo, cda) => {
+                Err(crate::error::SchcError::RuleValidation(format!(
+                    "Field {}: Invalid MO/CDA combination: {:?} with {:?}. \
+                    Valid combinations per RFC 8724: equal→not-sent, ignore→value-sent/compute, MSB→LSB, match-mapping→mapping-sent",
+                    self.fid, mo, cda
+                )))
+            }
+        }
     }
 
     /// Get field length in bits if specified
@@ -153,7 +229,7 @@ pub enum CompressionAction {
     NotSent,
     ValueSent,
     MappingSent,
-    Lsb(u8),
+    Lsb,
     Compute,
 }
 
@@ -193,7 +269,7 @@ where
         "not-sent" => CompressionAction::NotSent,
         "value-sent" => CompressionAction::ValueSent,
         "mapping-sent" => CompressionAction::MappingSent,
-        "LSB" => CompressionAction::Lsb(0),
+        "LSB" => CompressionAction::Lsb,
         "compute" => CompressionAction::Compute,
         _ => CompressionAction::ValueSent,
     })
@@ -207,10 +283,36 @@ where
         CompressionAction::NotSent => "not-sent",
         CompressionAction::ValueSent => "value-sent",
         CompressionAction::MappingSent => "mapping-sent",
-        CompressionAction::Lsb(_) => "LSB",
+        CompressionAction::Lsb => "LSB",
         CompressionAction::Compute => "compute",
     };
     serializer.serialize_str(s)
+}
+
+/// Deserialize Direction Indicator from JSON
+/// RFC 8724 DI values: "up" (device→network), "down" (network→device), "bi" (bidirectional)
+fn deserialize_di<'de, D>(deserializer: D) -> std::result::Result<Option<Direction>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(match opt.as_deref() {
+        Some("up") | Some("Up") => Some(Direction::Up),
+        Some("down") | Some("Down") | Some("Dw") => Some(Direction::Down),
+        Some("bi") | Some("Bi") | None => None, // Bidirectional or not specified
+        _ => None, // Default to bidirectional for unknown values
+    })
+}
+
+fn serialize_di<S>(di: &Option<Direction>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match di {
+        Some(Direction::Up) => serializer.serialize_str("up"),
+        Some(Direction::Down) => serializer.serialize_str("down"),
+        None => serializer.serialize_str("bi"),
+    }
 }
 
 fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleValue> {

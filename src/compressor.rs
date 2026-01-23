@@ -153,10 +153,10 @@ fn compress_field(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldValue
                     }
                 }
         }
-        CompressionAction::Lsb(_) => {
+        CompressionAction::Lsb => {
             let msb_bits = field.mo_val.unwrap_or(0);
             let field_size = get_field_size_bits(field, value);
-            
+
             if msb_bits as u16 <= field_size {
                 let lsb_bits = field_size - msb_bits as u16;
                 send_lsb(bits, value, lsb_bits as u8);
@@ -195,6 +195,8 @@ fn send_field_value(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldVal
                 let bytes = v.octets();
                 bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(&bytes[..byte_len.min(16)]));
             },
+            // ComputePlaceholder: nothing to send, value will be computed during decompression
+            FieldValue::ComputePlaceholder => {}
         }
     } else {
         // Fallback to full Rust type size (should rarely happen)
@@ -206,6 +208,8 @@ fn send_field_value(bits: &mut BitVec<u8, Msb0>, field: &Field, value: &FieldVal
             FieldValue::Bytes(v) => bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(v)),
             FieldValue::Ipv4(v) => bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(&v.octets())),
             FieldValue::Ipv6(v) => bits.extend_from_bitslice(BitSlice::<_, Msb0>::from_slice(&v.octets())),
+            // ComputePlaceholder: nothing to send, value will be computed during decompression
+            FieldValue::ComputePlaceholder => {}
         }
     }
 }
@@ -398,6 +402,7 @@ mod tests {
         let field = Field {
             fid: FieldId::Ipv6Ver,
             fl: Some(4),
+            di: None,
             tv: None,
             mo: crate::rule::MatchingOperator::Equal,
             cda: CompressionAction::NotSent,
@@ -405,7 +410,7 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U8(6);
-        
+
         assert_eq!(get_field_size_bits(&field, &value), 4);
     }
 
@@ -415,6 +420,7 @@ mod tests {
         let field = Field {
             fid: FieldId::UdpSrcPort,
             fl: None,
+            di: None,
             tv: None,
             mo: crate::rule::MatchingOperator::Ignore,
             cda: CompressionAction::ValueSent,
@@ -422,7 +428,7 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(8080);
-        
+
         assert_eq!(get_field_size_bits(&field, &value), 16); // UDP port is 16 bits
     }
 
@@ -432,6 +438,7 @@ mod tests {
         let field = Field {
             fid: FieldId::Ipv6Ver, // 4-bit default
             fl: None,
+            di: None,
             tv: None,
             mo: crate::rule::MatchingOperator::Equal,
             cda: CompressionAction::NotSent,
@@ -440,7 +447,7 @@ mod tests {
         };
         // not the value's size (8 bits for U8)
         let value = FieldValue::U8(6);
-        
+
         assert_eq!(get_field_size_bits(&field, &value), 4);
     }
 
@@ -491,6 +498,7 @@ mod tests {
         let field = Field {
             fid: FieldId::Ipv6Ver,
             fl: Some(4),
+            di: None,
             tv: Some(serde_json::json!(6)),
             mo: crate::rule::MatchingOperator::Equal,
             cda: CompressionAction::NotSent,
@@ -498,9 +506,9 @@ mod tests {
             parsed_tv: Some(crate::rule::ParsedTargetValue::Single(crate::rule::RuleValue::U64(6))),
         };
         let value = FieldValue::U8(6);
-        
+
         compress_field(&mut bits, &field, &value);
-        
+
         assert_eq!(bits.len(), 0); // Nothing should be added
     }
 
@@ -510,6 +518,7 @@ mod tests {
         let field = Field {
             fid: FieldId::UdpCksum,
             fl: Some(16),
+            di: None,
             tv: None,
             mo: crate::rule::MatchingOperator::Ignore,
             cda: CompressionAction::Compute,
@@ -517,9 +526,9 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(0x1234);
-        
+
         compress_field(&mut bits, &field, &value);
-        
+
         assert_eq!(bits.len(), 0); // Nothing should be added
     }
 
@@ -529,6 +538,7 @@ mod tests {
         let field = Field {
             fid: FieldId::UdpSrcPort,
             fl: Some(16),
+            di: None,
             tv: None,
             mo: crate::rule::MatchingOperator::Ignore,
             cda: CompressionAction::ValueSent,
@@ -536,9 +546,9 @@ mod tests {
             parsed_tv: None,
         };
         let value = FieldValue::U16(0xABCD);
-        
+
         compress_field(&mut bits, &field, &value);
-        
+
         assert_eq!(bits.len(), 16);
         let bytes = bits.into_vec();
         assert_eq!(bytes, vec![0xAB, 0xCD]);
@@ -550,16 +560,17 @@ mod tests {
         let field = Field {
             fid: FieldId::UdpSrcPort,
             fl: Some(16),
+            di: None,
             tv: Some(serde_json::json!(0x1200)), // MSB 8 bits: 0x12
             mo: crate::rule::MatchingOperator::Msb(8),
-            cda: CompressionAction::Lsb(8),
+            cda: CompressionAction::Lsb,
             mo_val: Some(8), // MSB matched on 8 bits
             parsed_tv: Some(crate::rule::ParsedTargetValue::Single(crate::rule::RuleValue::U64(0x1200))),
         };
         let value = FieldValue::U16(0x1234); // LSB 8 bits: 0x34
-        
+
         compress_field(&mut bits, &field, &value);
-        
+
         assert_eq!(bits.len(), 8); // Only LSB 8 bits sent
         let bytes = bits.into_vec();
         assert_eq!(bytes, vec![0x34]);

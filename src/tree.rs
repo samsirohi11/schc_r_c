@@ -38,6 +38,8 @@ pub struct BranchInfo {
     pub tv: Option<RuleValue>,
     pub mapping_tv: Option<Vec<RuleValue>>,  // For match-mapping: list of valid values
     pub fl: Option<u16>,
+    /// Direction Indicator: Some(Up) for uplink only, Some(Down) for downlink only, None for bidirectional
+    pub di: Option<crate::parser::Direction>,
 }
 
 /// A branch connecting to another node
@@ -181,6 +183,7 @@ fn build_path_recursive(current: &mut TreeNode, rule: &Rule, remaining: &[Field]
             tv: None,
             mapping_tv: None,
             fl: None,
+            di: None,
         };
         current.add_branch(end_key, leaf, end_info);
         return;
@@ -241,7 +244,7 @@ fn get_branch_key(field: &Field) -> BranchKey {
         _ => None,
     };
     
-    BranchKey::new(value, None, mo_type, field.mo_val, mapping_hash)
+    BranchKey::new(value, field.di, mo_type, field.mo_val, mapping_hash)
 }
 
 fn field_to_branch_info(field: &Field) -> BranchInfo {
@@ -259,6 +262,7 @@ fn field_to_branch_info(field: &Field) -> BranchInfo {
         tv,
         mapping_tv,
         fl: field.fl,
+        di: field.di,
     }
 }
 
@@ -357,10 +361,11 @@ mod tests {
             tv: Some(RuleValue::U64(6)),
             mapping_tv: None,
             fl: Some(4),
+            di: None,
         };
-        
+
         root.add_branch(key.clone(), child, info);
-        
+
         assert!(root.branches.contains_key(&key));
         assert_eq!(root.branches.get(&key).unwrap().len(), 1);
     }
@@ -369,7 +374,7 @@ mod tests {
     fn test_add_multiple_branches_same_key() {
         let mut root = TreeNode::new_root();
         let key = BranchKey::new(None, None, 1, None, None); // Ignore MO
-        
+
         // Add two branches with same key (ignore operator)
         for i in 0..2 {
             let child = TreeNode::new_field(FieldId::Ipv6Tc);
@@ -381,6 +386,7 @@ mod tests {
                 tv: None,
                 mapping_tv: None,
                 fl: Some(8),
+                di: None,
             };
             root.add_branch(key.clone(), child, info);
             
@@ -412,8 +418,9 @@ mod tests {
             tv: Some(RuleValue::U64(6)),
             mapping_tv: None,
             fl: Some(4),
+            di: None,
         };
-        
+
         root.add_branch(key, child, info);
         assert_eq!(root.count_nodes(), 2);
     }
@@ -433,7 +440,7 @@ mod tests {
     #[test]
     fn test_count_leaves_with_children() {
         let mut root = TreeNode::new_root();
-        
+
         // Add two leaf branches
         for i in 0..2 {
             let leaf = TreeNode::new_leaf(i, 8);
@@ -446,10 +453,11 @@ mod tests {
                 tv: Some(RuleValue::U64(i as u64)),
                 mapping_tv: None,
                 fl: Some(4),
+                di: None,
             };
             root.add_branch(key, leaf, info);
         }
-        
+
         assert_eq!(root.count_leaves(), 2);
     }
 
@@ -509,10 +517,10 @@ mod tests {
     #[test]
     fn test_find_rule_ids_nested() {
         let mut root = TreeNode::new_root();
-        
+
         // Add nested structure with two leaves
         let mut middle = TreeNode::new_field(FieldId::Ipv6Ver);
-        
+
         let leaf1 = TreeNode::new_leaf(10, 4);
         let key1 = BranchKey::new(Some(END_MARKER.to_vec()), None, 0, None, None);
         let info1 = BranchInfo {
@@ -523,9 +531,10 @@ mod tests {
             tv: None,
             mapping_tv: None,
             fl: None,
+            di: None,
         };
         middle.add_branch(key1, leaf1, info1);
-        
+
         let leaf2 = TreeNode::new_leaf(20, 5);
         let key2 = BranchKey::new(Some(vec![1]), None, 0, None, None);
         let info2 = BranchInfo {
@@ -536,9 +545,10 @@ mod tests {
             tv: Some(RuleValue::U64(1)),
             mapping_tv: None,
             fl: None,
+            di: None,
         };
         middle.add_branch(key2, leaf2, info2);
-        
+
         let middle_key = BranchKey::new(Some(vec![6]), None, 0, None, None);
         let middle_info = BranchInfo {
             fid: FieldId::Ipv6Ver,
@@ -548,9 +558,10 @@ mod tests {
             tv: Some(RuleValue::U64(6)),
             mapping_tv: None,
             fl: Some(4),
+            di: None,
         };
         root.add_branch(middle_key, middle, middle_info);
-        
+
         let ids = find_rule_ids_in_branch(&root);
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&(10, 4)));

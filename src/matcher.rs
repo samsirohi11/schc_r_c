@@ -17,6 +17,8 @@ use crate::parser::StreamingParser;
 #[inline]
 pub fn values_match(packet_value: &FieldValue, target_value: &RuleValue) -> bool {
     match (packet_value, target_value) {
+        // ComputePlaceholder never matches any value
+        (FieldValue::ComputePlaceholder, _) => false,
         (FieldValue::U8(p), RuleValue::U64(t)) => *p as u64 == *t,
         (FieldValue::U16(p), RuleValue::U64(t)) => *p as u64 == *t,
         (FieldValue::U32(p), RuleValue::U64(t)) => *p as u64 == *t,
@@ -42,6 +44,11 @@ pub fn values_match(packet_value: &FieldValue, target_value: &RuleValue) -> bool
 /// Check if packet value matches target value on MSB bits
 #[inline]
 pub fn msb_match(pv: &FieldValue, tv: &RuleValue, bits: u8, fid: FieldId) -> bool {
+    // ComputePlaceholder never matches
+    if matches!(pv, FieldValue::ComputePlaceholder) {
+        return false;
+    }
+
     let packet_num = match pv {
         FieldValue::U8(v) => *v as u64,
         FieldValue::U16(v) => *v as u64,
@@ -73,13 +80,21 @@ pub fn msb_match(pv: &FieldValue, tv: &RuleValue, bits: u8, fid: FieldId) -> boo
 /// Returns (matched, field_value) - field_value is Some if the field was successfully parsed
 #[inline]
 pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> Option<(bool, Option<FieldValue>)> {
+    // Check Direction Indicator (DI) - if branch specifies a direction, it must match packet direction
+    // None (bidirectional) matches any packet direction
+    if let Some(branch_di) = info.di
+        && branch_di != parser.direction()
+    {
+        return Some((false, None));
+    }
+
     // For QUIC.DCID on short headers, set the expected length from the rule's target value
     // This allows us to parse the correct number of bytes for matching
     if info.fid == FieldId::QuicDcid
         && let Some(RuleValue::Bytes(tv_bytes)) = &info.tv {
             parser.set_quic_dcid_len(tv_bytes.len() as u8);
         }
-    
+
     let packet_value = match parser.parse_field(info.fid) {
         Ok(Some(v)) => v.clone(),
         Ok(None) => return Some((false, None)),

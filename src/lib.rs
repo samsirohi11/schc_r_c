@@ -23,8 +23,8 @@ pub use rule::{CompressionAction, Field, MatchingOperator, Rule, RuleSet};
 
 // Re-export main types from streaming_tree for ease of use
 pub use streaming_tree::{
-    CompressedPacket, Direction, FieldValue, TreeNode, build_tree, compress_packet,
-    display_packet_fields, display_tree,
+    CompressedPacket, Direction, FieldValue, TreeNode, LinkLayer, build_tree, compress_packet,
+    compress_packet_with_link_layer, display_packet_fields, display_tree,
 };
 
 // Re-export decompression types

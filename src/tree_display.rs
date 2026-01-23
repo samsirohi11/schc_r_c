@@ -79,7 +79,7 @@ fn display_node(node: &TreeNode, prefix: &str, is_last: bool) {
                 CompressionAction::NotSent => "not-sent",
                 CompressionAction::ValueSent => "value-sent",
                 CompressionAction::MappingSent => "mapping-sent",
-                CompressionAction::Lsb(_) => "LSB",
+                CompressionAction::Lsb => "LSB",
                 CompressionAction::Compute => "compute",
             };
 

@@ -3,7 +3,6 @@
 //! On-demand field extraction from raw packets. Fields are parsed lazily
 //! during tree traversal to enable early pruning when mismatches are detected.
 
-use pnet::packet::ethernet::EthernetPacket;
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
@@ -25,6 +24,35 @@ pub enum Direction {
 }
 
 // =============================================================================
+// Link Layer Configuration
+// =============================================================================
+
+/// Link layer type for packet parsing
+///
+/// Specifies how much of the packet prefix to skip before the IP header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkLayer {
+    /// No link layer header (raw IP packets)
+    None,
+    /// Standard Ethernet header (14 bytes: 6 dst + 6 src + 2 ethertype)
+    #[default]
+    Ethernet,
+    /// Custom link layer with specified header length in bytes
+    Custom(usize),
+}
+
+impl LinkLayer {
+    /// Get the header length in bytes for this link layer type
+    pub fn header_len(&self) -> usize {
+        match self {
+            LinkLayer::None => 0,
+            LinkLayer::Ethernet => 14,
+            LinkLayer::Custom(len) => *len,
+        }
+    }
+}
+
+// =============================================================================
 // Field Values
 // =============================================================================
 
@@ -38,6 +66,9 @@ pub enum FieldValue {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
     Bytes(Vec<u8>),
+    /// Placeholder for fields that will be computed during decompression
+    /// (e.g., checksums, lengths). This replaces using zero as a sentinel.
+    ComputePlaceholder,
 }
 
 impl FieldValue {
@@ -51,6 +82,7 @@ impl FieldValue {
             FieldValue::Ipv4(v) => v.to_string(),
             FieldValue::Ipv6(v) => v.to_string(),
             FieldValue::Bytes(v) => hex::encode(v),
+            FieldValue::ComputePlaceholder => "<compute>".to_string(),
         }
     }
 
@@ -64,6 +96,7 @@ impl FieldValue {
             FieldValue::Ipv4(_) => 32,
             FieldValue::Ipv6(_) => 128,
             FieldValue::Bytes(b) => (b.len() * 8) as u16,
+            FieldValue::ComputePlaceholder => 0,
         }
     }
 }
@@ -95,6 +128,17 @@ pub struct QuicContext {
 }
 
 // =============================================================================
+// CoAP Context
+// =============================================================================
+
+/// CoAP parsing context to track token length across field parsing
+#[derive(Debug, Clone, Default)]
+pub struct CoapContext {
+    /// Cached TKL (Token Length) from CoAP header (0-8)
+    pub tkl: Option<u8>,
+}
+
+// =============================================================================
 // Streaming Parser
 // =============================================================================
 
@@ -108,22 +152,30 @@ pub struct StreamingParser<'a> {
     pub(crate) parsed_fields: HashMap<FieldId, FieldValue>,
     /// QUIC context for tracking connection ID lengths
     quic_ctx: QuicContext,
+    /// CoAP context for tracking token length
+    coap_ctx: CoapContext,
+    /// Link layer configuration (stored for potential packet reconstruction)
+    #[allow(dead_code)]
+    link_layer: LinkLayer,
 }
 
 impl<'a> StreamingParser<'a> {
-    /// Create a new streaming parser for a raw packet
+    /// Create a new streaming parser for a raw packet with Ethernet link layer (default)
     pub fn new(raw: &'a [u8], direction: Direction) -> Result<Self> {
+        Self::with_link_layer(raw, direction, LinkLayer::Ethernet)
+    }
+
+    /// Create a new streaming parser with a specified link layer type
+    pub fn with_link_layer(raw: &'a [u8], direction: Direction, link_layer: LinkLayer) -> Result<Self> {
         if raw.is_empty() {
             return Err(SchcError::PacketParse("Empty packet".to_string()));
         }
 
-        let ip_start = if raw.len() > 14 {
-            if let Some(_eth) = EthernetPacket::new(raw) {
-                14
-            } else {
-                14 // Assume ethernet
-            }
+        let header_len = link_layer.header_len();
+        let ip_start = if raw.len() > header_len {
+            header_len
         } else {
+            // Packet too small for link layer header, assume raw IP
             0
         };
 
@@ -146,6 +198,8 @@ impl<'a> StreamingParser<'a> {
             direction,
             parsed_fields: HashMap::new(),
             quic_ctx: QuicContext::default(),
+            coap_ctx: CoapContext::default(),
+            link_layer,
         })
     }
 
@@ -157,6 +211,11 @@ impl<'a> StreamingParser<'a> {
     /// Get the raw packet data
     pub fn raw(&self) -> &[u8] {
         self.raw
+    }
+
+    /// Get the packet direction
+    pub fn direction(&self) -> Direction {
+        self.direction
     }
 
     /// Parse a field and cache the result
@@ -283,7 +342,21 @@ impl<'a> StreamingParser<'a> {
             | FieldId::QuicScidLen
             | FieldId::QuicScid => self.extract_quic_field(fid),
 
-            // Unsupported fields (COAP, ICMPv6, IP.VER, etc.) - generated from JSON but not yet implemented
+            // CoAP Fields
+            FieldId::CoapVer
+            | FieldId::CoapType
+            | FieldId::CoapTkl
+            | FieldId::CoapCode
+            | FieldId::CoapMid
+            | FieldId::CoapToken => self.extract_coap_field(fid),
+
+            // ICMPv6 Fields
+            FieldId::Icmpv6Type
+            | FieldId::Icmpv6Code
+            | FieldId::Icmpv6Checksum
+            | FieldId::Icmpv6Payload => self.extract_icmpv6_field(fid),
+
+            // Unsupported fields (IP.VER, CoAP options, etc.) - generated from JSON but not yet implemented
             _ => Ok(None),
         }
     }
@@ -702,6 +775,163 @@ impl<'a> StreamingParser<'a> {
     pub fn quic_context(&self) -> &QuicContext {
         &self.quic_ctx
     }
+
+    // =========================================================================
+    // CoAP Parsing
+    // =========================================================================
+
+    /// Get the CoAP header start offset (after UDP header)
+    /// Returns None if UDP ports don't indicate CoAP traffic
+    fn get_coap_start(&mut self) -> Result<Option<usize>> {
+        let udp_start = self.get_udp_start()?;
+
+        // Check if this is CoAP traffic by examining UDP ports
+        // CoAP typically uses port 5683 (CoAP) or 5684 (CoAPS/DTLS)
+        let src_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpSrcPort) {
+            *p
+        } else {
+            return Ok(None);
+        };
+
+        let dst_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpDstPort) {
+            *p
+        } else {
+            return Ok(None);
+        };
+
+        // Only parse CoAP if either port is a known CoAP port
+        const COAP_PORTS: [u16; 2] = [5683, 5684];
+        let is_coap = COAP_PORTS.contains(&src_port) || COAP_PORTS.contains(&dst_port);
+        if !is_coap {
+            return Ok(None);
+        }
+
+        Ok(Some(udp_start + 8)) // UDP header is 8 bytes
+    }
+
+    /// Extract CoAP header fields
+    ///
+    /// CoAP header structure (RFC 7252):
+    /// Byte 0: Ver(2) | Type(2) | TKL(4)
+    /// Byte 1: Code(8)
+    /// Bytes 2-3: Message ID (16)
+    /// Bytes 4+: Token (TKL bytes, 0-8)
+    fn extract_coap_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
+        let coap_start = match self.get_coap_start() {
+            Ok(Some(start)) => start,
+            Ok(None) => return Ok(None), // Not a CoAP packet (wrong ports)
+            Err(_) => return Ok(None),   // Not a UDP packet
+        };
+
+        if coap_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        let coap_data = &self.raw[coap_start..];
+        if coap_data.len() < 4 {
+            return Ok(None); // CoAP header must be at least 4 bytes
+        }
+
+        let first_byte = coap_data[0];
+        let ver = (first_byte >> 6) & 0x03;  // Bits 0-1 (MSB)
+        let msg_type = (first_byte >> 4) & 0x03; // Bits 2-3
+        let tkl = first_byte & 0x0F;         // Bits 4-7 (LSB)
+
+        // Cache TKL for token parsing
+        self.coap_ctx.tkl = Some(tkl);
+
+        match fid {
+            FieldId::CoapVer => Ok(Some(FieldValue::U8(ver))),
+            FieldId::CoapType => Ok(Some(FieldValue::U8(msg_type))),
+            FieldId::CoapTkl => Ok(Some(FieldValue::U8(tkl))),
+            FieldId::CoapCode => Ok(Some(FieldValue::U8(coap_data[1]))),
+            FieldId::CoapMid => {
+                let mid = u16::from_be_bytes([coap_data[2], coap_data[3]]);
+                Ok(Some(FieldValue::U16(mid)))
+            }
+            FieldId::CoapToken => {
+                let token_len = tkl as usize;
+                if token_len == 0 {
+                    return Ok(Some(FieldValue::Bytes(Vec::new())));
+                }
+                if token_len > 8 || coap_data.len() < 4 + token_len {
+                    return Ok(None); // Invalid TKL or not enough data
+                }
+                let token = coap_data[4..4 + token_len].to_vec();
+                Ok(Some(FieldValue::Bytes(token)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // =========================================================================
+    // ICMPv6 Parsing
+    // =========================================================================
+
+    /// Get the ICMPv6 header start offset
+    /// Returns None if not an ICMPv6 packet (IPv6 Next Header != 58)
+    fn get_icmpv6_start(&mut self) -> Result<Option<usize>> {
+        // ICMPv6 only works with IPv6
+        if self.layer != ProtocolLayer::Ipv6 {
+            return Ok(None);
+        }
+
+        // Parse next protocol if not already done
+        if self.next_protocol.is_none() {
+            let ip_data = &self.raw[self.ip_start..];
+            if let Some(ipv6) = Ipv6Packet::new(ip_data) {
+                self.next_protocol = Some(ipv6.get_next_header().0);
+            }
+        }
+
+        // ICMPv6 protocol number is 58
+        if self.next_protocol != Some(58) {
+            return Ok(None);
+        }
+
+        // ICMPv6 starts after IPv6 header (40 bytes)
+        Ok(Some(self.ip_start + 40))
+    }
+
+    /// Extract ICMPv6 header fields
+    ///
+    /// ICMPv6 header structure (RFC 4443):
+    /// Byte 0: Type (8)
+    /// Byte 1: Code (8)
+    /// Bytes 2-3: Checksum (16)
+    fn extract_icmpv6_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
+        let icmpv6_start = match self.get_icmpv6_start() {
+            Ok(Some(start)) => start,
+            Ok(None) => return Ok(None), // Not an ICMPv6 packet
+            Err(_) => return Ok(None),
+        };
+
+        if icmpv6_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        let icmpv6_data = &self.raw[icmpv6_start..];
+        if icmpv6_data.len() < 4 {
+            return Ok(None); // ICMPv6 header must be at least 4 bytes
+        }
+
+        match fid {
+            FieldId::Icmpv6Type => Ok(Some(FieldValue::U8(icmpv6_data[0]))),
+            FieldId::Icmpv6Code => Ok(Some(FieldValue::U8(icmpv6_data[1]))),
+            FieldId::Icmpv6Checksum => {
+                let checksum = u16::from_be_bytes([icmpv6_data[2], icmpv6_data[3]]);
+                Ok(Some(FieldValue::U16(checksum)))
+            }
+            FieldId::Icmpv6Payload => {
+                if icmpv6_data.len() <= 4 {
+                    return Ok(Some(FieldValue::Bytes(Vec::new())));
+                }
+                let payload = icmpv6_data[4..].to_vec();
+                Ok(Some(FieldValue::Bytes(payload)))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 // =============================================================================
@@ -746,6 +976,17 @@ pub fn parse_packet_fields(
             FieldId::QuicDcid,
             FieldId::QuicScidLen,
             FieldId::QuicScid,
+            // CoAP fields (only attempt if we have a UDP packet with CoAP ports)
+            FieldId::CoapVer,
+            FieldId::CoapType,
+            FieldId::CoapTkl,
+            FieldId::CoapCode,
+            FieldId::CoapMid,
+            FieldId::CoapToken,
+            // ICMPv6 fields (only attempt if next header is 58)
+            FieldId::Icmpv6Type,
+            FieldId::Icmpv6Code,
+            FieldId::Icmpv6Checksum,
         ]
     } else if ip_version == 4 {
         vec![
@@ -773,6 +1014,13 @@ pub fn parse_packet_fields(
             FieldId::QuicDcid,
             FieldId::QuicScidLen,
             FieldId::QuicScid,
+            // CoAP fields (only attempt if we have a UDP packet with CoAP ports)
+            FieldId::CoapVer,
+            FieldId::CoapType,
+            FieldId::CoapTkl,
+            FieldId::CoapCode,
+            FieldId::CoapMid,
+            FieldId::CoapToken,
         ]
     } else {
         vec![]

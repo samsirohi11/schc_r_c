@@ -1,7 +1,7 @@
 //! Packet Header Builder
 //!
 //! Reconstructs complete protocol headers from decompressed field values.
-//! Handles IPv4, IPv6, UDP, and QUIC (partially) header reconstruction with proper
+//! Handles IPv4, IPv6, UDP, CoAP, and QUIC header reconstruction with proper
 //! byte ordering, checksum computation, and length calculation.
 
 use std::collections::HashMap;
@@ -61,8 +61,17 @@ pub fn build_headers(
         || fields.contains_key(&FieldId::UdpDevPort)
         || fields.contains_key(&FieldId::UdpAppPort);
 
-    // Determine if QUIC is present
+    // Determine if ICMPv6 is present (transport layer, directly over IPv6)
+    let has_icmpv6 = fields.contains_key(&FieldId::Icmpv6Type)
+        || fields.contains_key(&FieldId::Icmpv6Code);
+
+    // Determine if QUIC is present (application layer over UDP)
     let has_quic = fields.contains_key(&FieldId::QuicFirstByte);
+
+    // Determine if CoAP is present (application layer over UDP)
+    let has_coap = fields.contains_key(&FieldId::CoapVer)
+        || fields.contains_key(&FieldId::CoapType)
+        || fields.contains_key(&FieldId::CoapCode);
 
     // Calculate QUIC header length (dynamically based on connection IDs)
     let quic_len = if has_quic {
@@ -85,28 +94,53 @@ pub fn build_headers(
         0
     };
 
-    let transport_len = if has_udp { 8 } else { 0 }; // UDP header is 8 bytes
+    // Calculate CoAP header length (4 bytes fixed + token length)
+    let coap_len = if has_coap {
+        let tkl = get_field_u8(fields, FieldId::CoapTkl).unwrap_or(0) as usize;
+        4 + tkl // 4 bytes fixed header + token
+    } else {
+        0
+    };
+
+    // Transport layer length: UDP (8 bytes) or ICMPv6 (4 bytes fixed header)
+    let transport_len = if has_udp {
+        8
+    } else if has_icmpv6 {
+        4 // ICMPv6 fixed header is 4 bytes (Type + Code + Checksum)
+    } else {
+        0
+    };
 
     // Build headers
     let mut data = Vec::new();
     let ip_start = 0; // ethernet header is not compressed
 
-    // Build IP header (payload = transport + quic + actual_payload)
+    // Application layer length (either QUIC or CoAP)
+    let app_layer_len = quic_len + coap_len;
+
+    // Build IP header (payload = transport + app_layer + actual_payload)
     let ip_header = if ip_version == 6 {
-        build_ipv6_header(fields, direction, payload_len + transport_len + quic_len)?
+        build_ipv6_header(fields, direction, payload_len + transport_len + app_layer_len)?
     } else {
-        build_ipv4_header(fields, payload_len + transport_len + quic_len)?
+        build_ipv4_header(fields, payload_len + transport_len + app_layer_len)?
     };
 
     data.extend_from_slice(&ip_header);
     let transport_start = data.len();
 
-    // Build transport header (payload = quic + actual_payload)
+    // Build transport header
     if has_udp {
-        // For UDP, the "payload" for length & checksum must include QUIC header + actual payload
+        // For UDP, the "payload" for length & checksum must include app layer header + actual payload
         let udp_payload: Vec<u8> = if has_quic {
             let quic_header = build_quic_header(fields)?;
             let mut combined = quic_header;
+            if let Some(p) = payload {
+                combined.extend_from_slice(p);
+            }
+            combined
+        } else if has_coap {
+            let coap_header = build_coap_header(fields)?;
+            let mut combined = coap_header;
             if let Some(p) = payload {
                 combined.extend_from_slice(p);
             }
@@ -125,12 +159,19 @@ pub fn build_headers(
             Some(&udp_payload),
         )?;
         data.extend_from_slice(&udp_header);
+    } else if has_icmpv6 {
+        // ICMPv6 is directly over IPv6
+        let icmpv6_header = build_icmpv6_header(fields, &ip_header, payload)?;
+        data.extend_from_slice(&icmpv6_header);
     }
 
-    // Build QUIC header if present
+    // Build application layer header if present (either QUIC or CoAP, over UDP)
     if has_quic {
         let quic_header = build_quic_header(fields)?;
         data.extend_from_slice(&quic_header);
+    } else if has_coap {
+        let coap_header = build_coap_header(fields)?;
+        data.extend_from_slice(&coap_header);
     }
 
     Ok(ReconstructedHeaders {
@@ -576,6 +617,98 @@ fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
 }
 
 // =============================================================================
+// CoAP Header Construction
+// =============================================================================
+
+/// Build CoAP header from decompressed fields
+///
+/// CoAP Header Format (RFC 7252):
+/// ```text
+/// 0                   1                   2                   3
+/// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |Ver| T |  TKL  |      Code     |          Message ID           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   Token (if any, TKL bytes) ...
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+fn build_coap_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
+    let ver = get_field_u8(fields, FieldId::CoapVer).unwrap_or(1);
+    let msg_type = get_field_u8(fields, FieldId::CoapType).unwrap_or(0);
+    let tkl = get_field_u8(fields, FieldId::CoapTkl).unwrap_or(0);
+    let code = get_field_u8(fields, FieldId::CoapCode).unwrap_or(0);
+    let mid = get_field_u16(fields, FieldId::CoapMid).unwrap_or(0);
+
+    let mut header = Vec::with_capacity(4 + tkl as usize);
+
+    // Byte 0: Ver (2 bits) | Type (2 bits) | TKL (4 bits)
+    header.push((ver << 6) | ((msg_type & 0x03) << 4) | (tkl & 0x0F));
+
+    // Byte 1: Code
+    header.push(code);
+
+    // Bytes 2-3: Message ID
+    header.extend_from_slice(&mid.to_be_bytes());
+
+    // Token (TKL bytes)
+    if tkl > 0 
+        && let Some(FieldValue::Bytes(token)) = fields.get(&FieldId::CoapToken) {
+            let token_len = tkl.min(token.len() as u8) as usize;
+            header.extend_from_slice(&token[..token_len]);
+        }
+
+    Ok(header)
+}
+
+// =============================================================================
+// ICMPv6 Header Construction
+// =============================================================================
+
+/// Build ICMPv6 header from decompressed fields
+///
+/// ICMPv6 Header Format (RFC 4443):
+/// ```text
+/// 0                   1                   2                   3
+/// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |     Type      |     Code      |          Checksum             |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                         Message Body                          |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+fn build_icmpv6_header(
+    fields: &HashMap<FieldId, FieldValue>,
+    ip_header: &[u8],
+    payload: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let icmp_type = get_field_u8(fields, FieldId::Icmpv6Type).unwrap_or(0);
+    let icmp_code = get_field_u8(fields, FieldId::Icmpv6Code).unwrap_or(0);
+
+    let mut header = vec![icmp_type, icmp_code];
+
+    // Bytes 2-3: Checksum (placeholder, will be computed)
+    header.push(0);
+    header.push(0);
+
+    // Compute checksum if needed
+    let needs_checksum = fields
+        .get(&FieldId::Icmpv6Checksum)
+        .map(is_compute_placeholder)
+        .unwrap_or(true);
+
+    if needs_checksum {
+        let actual_payload = payload.unwrap_or(&[]);
+        let checksum = compute_icmpv6_checksum(ip_header, &header, actual_payload);
+        header[2..4].copy_from_slice(&checksum.to_be_bytes());
+    } else {
+        let checksum = get_field_u16(fields, FieldId::Icmpv6Checksum).unwrap_or(0);
+        header[2..4].copy_from_slice(&checksum.to_be_bytes());
+    }
+
+    Ok(header)
+}
+
+// =============================================================================
 // Checksum Computation
 // =============================================================================
 
@@ -670,6 +803,62 @@ pub fn compute_udp_checksum(
     }
 }
 
+/// Compute ICMPv6 checksum with pseudo-header (RFC 4443)
+///
+/// ICMPv6 checksum uses IPv6 pseudo-header similar to UDP/TCP
+pub fn compute_icmpv6_checksum(
+    ip_header: &[u8],
+    icmpv6_header: &[u8],
+    payload: &[u8],
+) -> u16 {
+    let mut sum: u32 = 0;
+
+    // IPv6 pseudo-header: src (16) + dst (16) + length (4) + zeros (3) + next_header (1)
+    if ip_header.len() >= 40 {
+        // Add source and destination addresses (bytes 8-39)
+        for i in (8..40).step_by(2) {
+            sum = sum.wrapping_add(((ip_header[i] as u32) << 8) | (ip_header[i + 1] as u32));
+        }
+
+        // ICMPv6 length (header + payload)
+        let icmpv6_len = (icmpv6_header.len() + payload.len()) as u32;
+        sum = sum.wrapping_add(icmpv6_len);
+
+        // Next Header: ICMPv6 = 58
+        sum = sum.wrapping_add(58);
+    }
+
+    // Add ICMPv6 header (skipping checksum field at bytes 2-3)
+    for i in (0..icmpv6_header.len()).step_by(2) {
+        if i == 2 {
+            continue; // Skip checksum field
+        }
+        let word = if i + 1 < icmpv6_header.len() {
+            ((icmpv6_header[i] as u32) << 8) | (icmpv6_header[i + 1] as u32)
+        } else {
+            (icmpv6_header[i] as u32) << 8
+        };
+        sum = sum.wrapping_add(word);
+    }
+
+    // Add payload
+    for i in (0..payload.len()).step_by(2) {
+        let word = if i + 1 < payload.len() {
+            ((payload[i] as u32) << 8) | (payload[i + 1] as u32)
+        } else {
+            (payload[i] as u32) << 8
+        };
+        sum = sum.wrapping_add(word);
+    }
+
+    // Fold 32-bit sum to 16 bits
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    !sum as u16
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -709,13 +898,8 @@ fn field_value_to_u16(v: &FieldValue) -> Option<u16> {
 }
 
 fn is_compute_placeholder(v: &FieldValue) -> bool {
-    // Placeholder values inserted by decompression for compute CDA
-    // match v {
-    //     FieldValue::U16(0) => true,
-    //     FieldValue::U8(0) => true,
-    //     _ => false,
-    // }
-    matches!(v, FieldValue::U16(0) | FieldValue::U8(0))
+    // Check for ComputePlaceholder variant which indicates field should be computed
+    matches!(v, FieldValue::ComputePlaceholder)
 }
 
 // =============================================================================

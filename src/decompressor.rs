@@ -156,14 +156,13 @@ fn decompress_field(
             // Read index and lookup in TV array
             decompress_mapping(bits, bit_pos, field)
         }
-        CompressionAction::Lsb(_) => {
+        CompressionAction::Lsb => {
             // Combine MSB from TV with LSB from residue
             decompress_lsb(bits, bit_pos, field)
         }
         CompressionAction::Compute => {
             // Placeholder - will be computed during header reconstruction
-            // Return a dummy value that will be replaced
-            Ok(FieldValue::U16(0))
+            Ok(FieldValue::ComputePlaceholder)
         }
     }
 }
@@ -324,7 +323,11 @@ fn read_field_value(
         FieldId::Ipv6SrcIid | FieldId::Ipv6DstIid |
         FieldId::Ipv6DevIid | FieldId::Ipv6AppIid |
         // QUIC connection IDs are variable-length bytes
-        FieldId::QuicDcid | FieldId::QuicScid
+        FieldId::QuicDcid | FieldId::QuicScid |
+        // CoAP Token is variable-length bytes (0-8 bytes based on TKL)
+        FieldId::CoapToken |
+        // ICMPv6 Payload is variable-length bytes
+        FieldId::Icmpv6Payload
     );
     
     if is_bytes_field || n > 64 {
@@ -406,6 +409,12 @@ fn get_field_size_bits_with_context(
                 return (*len as u16) * 8;
             }
         }
+        FieldId::CoapToken => {
+            // CoAP Token length is in bytes (from TKL field), convert to bits
+            if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::CoapTkl) {
+                return (*len as u16) * 8;
+            }
+        }
         _ => {}
     }
     
@@ -484,6 +493,7 @@ mod tests {
         let mut f = Field {
             fid,
             fl: None,
+            di: None,
             tv: tv.clone(),
             mo: MatchingOperator::Equal,
             cda,
@@ -608,6 +618,7 @@ mod tests {
         let mut field = Field {
             fid: FieldId::Ipv6HopLmt,
             fl: None,
+            di: None,
             tv: Some(serde_json::json!([64, 128, 255])),
             mo: MatchingOperator::MatchMapping,
             cda: CompressionAction::MappingSent,

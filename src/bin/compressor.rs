@@ -61,6 +61,7 @@ fn main() -> Result<()> {
     let mut packet_count = 0;
     let mut compressed_count = 0;
     let mut unmatched_count = 0;
+    let mut verified_count = 0;
     let mut total_original_bits = 0usize;
     let mut total_compressed_bits = 0usize;
     let mut unmatched_header_bits = 0usize;
@@ -193,6 +194,7 @@ fn main() -> Result<()> {
                                         let decompressed_header = &decompressed.header_data;
 
                                         if original_full == reconstructed_full.as_slice() {
+                                            verified_count += 1;
                                             println!("  ✓ Verification: PASSED");
                                         } else {
                                             // Check if difference is only in UDP checksum (bytes 46-47 for IPv6+UDP)
@@ -219,6 +221,7 @@ fn main() -> Result<()> {
                                             };
 
                                             if checksum_only {
+                                                verified_count += 1;
                                                 println!(
                                                     "  ⚠ Verification: PASSED (checksum differs - likely offloading)"
                                                 );
@@ -323,6 +326,9 @@ fn main() -> Result<()> {
     println!("{}", "=".repeat(80));
     println!("Total packets processed:    {}", packet_count);
     println!("Successfully compressed:    {}", compressed_count);
+    if args.verify {
+        println!("Verification passed:        {}", verified_count);
+    }
     println!("Unmatched (sent as-is):     {}", unmatched_count);
 
     let total_original_bytes = (total_original_bits + unmatched_header_bits).div_ceil(8);
