@@ -82,10 +82,10 @@ pub fn match_rule_id<'a>(data: &[u8], rules: &'a [Rule]) -> Result<&'a Rule> {
 /// Decompress a SCHC packet using the provided rules
 ///
 /// # Arguments
-/// * `compressed_data` - The compressed SCHC packet (rule ID + residues)
+/// * `compressed_data` - The compressed SCHC packet (rule ID + residues + payload)
 /// * `rules` - Available SCHC compression rules
 /// * `direction` - Packet direction (for directional field reconstruction)
-/// * `original_payload` - Optional payload to append to reconstructed header
+/// * `original_payload` - Optional explicit payload to append (if None, extracts from compressed_data)
 ///
 /// # Returns
 /// * `DecompressedPacket` with reconstructed header and fields
@@ -110,14 +110,24 @@ pub fn decompress_packet(
         fields.insert(field.fid, value);
     }
     
-    // Build the reconstructed header
-    let header_data = build_header(&fields, direction, original_payload)?;
+    // Extract payload from compressed data
+    // The payload starts at the next byte boundary after the residue bits
+    let residue_bytes = bit_pos.div_ceil(8);
+    let extracted_payload: &[u8] = if residue_bytes < compressed_data.len() {
+        &compressed_data[residue_bytes..]
+    } else {
+        &[]
+    };
+    
+    // Use explicitly provided payload if given, otherwise use extracted payload
+    let payload = original_payload.unwrap_or(extracted_payload);
+    
+    // Build the reconstructed header (pass payload for length/checksum computation)
+    let header_data = build_header(&fields, direction, Some(payload))?;
     
     // Build full packet (header + payload)
     let mut full_data = header_data.clone();
-    if let Some(payload) = original_payload {
-        full_data.extend_from_slice(payload);
-    }
+    full_data.extend_from_slice(payload);
     
     Ok(DecompressedPacket {
         header_data,

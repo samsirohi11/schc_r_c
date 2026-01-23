@@ -94,8 +94,21 @@ pub fn compress_packet_with_link_layer(
         Vec::new()
     };
 
+    // Get the payload and append it to the compressed data
+    // SCHC compresses headers only; the payload is sent uncompressed after the residues
+    let payload = parser.payload().unwrap_or(&[]);
+    let mut compressed_data = best.data;
+    compressed_data.extend_from_slice(payload);
+
+    if debug && !payload.is_empty() {
+        println!("\n--- Payload ---");
+        println!("Payload length: {} bytes", payload.len());
+        println!("Compressed header: {} bytes, total with payload: {} bytes", 
+                 compressed_data.len() - payload.len(), compressed_data.len());
+    }
+
     Ok(CompressedPacket {
-        data: best.data,
+        data: compressed_data,
         bit_length: best.compressed_bits,
         rule_id: best.rule_id,
         rule_id_length: best.rule_id_length,
@@ -121,14 +134,14 @@ fn traverse_and_compress(
     let indent = "  ".repeat(depth);
 
     if node.is_leaf {
-        if let (Some(rule_id), Some(_rule_id_length)) = (node.rule_id, node.rule_id_length)
-            && let Some(rule) = rules.iter().find(|r| r.rule_id == rule_id) {
+        if let (Some(rule_id), Some(rule_id_length)) = (node.rule_id, node.rule_id_length)
+            && let Some(rule) = rules.iter().find(|r| r.rule_id == rule_id && r.rule_id_length == rule_id_length) {
                 // Compress using collected path
                 let result = compress_with_rule(rule, parser);
                 
                 if debug {
                     println!("{}└─ ✓ MATCHED Rule {}/{} (savings: {} bits = {:.2} bytes)", 
-                             indent, rule_id, rule.rule_id_length, result.savings_bits, result.savings_bits as f64 / 8.0);
+                             indent, rule_id, rule_id_length, result.savings_bits, result.savings_bits as f64 / 8.0);
                     // Show per-field breakdown
                     for detail in &result.field_details {
                         let cda_str = match detail.cda {

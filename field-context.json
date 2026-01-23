@@ -271,6 +271,106 @@
       "unit": "bits",
       "description": "CoAP End-of-Options Marker (0xFF)"
     },
+    "COAP.URI_PATH": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Uri-Path Option (RFC 7252 Option 11)"
+    },
+    "COAP.CONTENT_FORMAT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "CoAP Content-Format Option (RFC 7252 Option 12)"
+    },
+    "COAP.URI_QUERY": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Uri-Query Option (RFC 7252 Option 15)"
+    },
+    "COAP.ACCEPT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "CoAP Accept Option (RFC 7252 Option 17)"
+    },
+    "COAP.LOCATION_PATH": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Location-Path Option (RFC 7252 Option 8)"
+    },
+    "COAP.LOCATION_QUERY": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Location-Query Option (RFC 7252 Option 20)"
+    },
+    "COAP.PROXY_URI": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Proxy-Uri Option (RFC 7252 Option 35)"
+    },
+    "COAP.PROXY_SCHEME": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Proxy-Scheme Option (RFC 7252 Option 39)"
+    },
+    "COAP.SIZE1": {
+      "length": 32,
+      "unit": "bits",
+      "description": "CoAP Size1 Option (RFC 7252 Option 60)"
+    },
+    "COAP.SIZE2": {
+      "length": 32,
+      "unit": "bits",
+      "description": "CoAP Size2 Option (RFC 7959 Option 28)"
+    },
+    "COAP.BLOCK1": {
+      "length": 24,
+      "unit": "bits",
+      "description": "CoAP Block1 Option (RFC 7959 Option 27)"
+    },
+    "COAP.BLOCK2": {
+      "length": 24,
+      "unit": "bits",
+      "description": "CoAP Block2 Option (RFC 7959 Option 23)"
+    },
+    "COAP.IF_MATCH": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP If-Match Option (RFC 7252 Option 1)"
+    },
+    "COAP.IF_NONE_MATCH": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP If-None-Match Option (RFC 7252 Option 5)"
+    },
+    "COAP.URI_HOST": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP Uri-Host Option (RFC 7252 Option 3)"
+    },
+    "COAP.URI_PORT": {
+      "length": 16,
+      "unit": "bits",
+      "description": "CoAP Uri-Port Option (RFC 7252 Option 7)"
+    },
+    "COAP.ETAG": {
+      "length": 0,
+      "unit": "bits",
+      "description": "CoAP ETag Option (RFC 7252 Option 4)"
+    },
+    "COAP.MAX_AGE": {
+      "length": 32,
+      "unit": "bits",
+      "description": "CoAP Max-Age Option (RFC 7252 Option 14)"
+    },
+    "COAP.OBSERVE": {
+      "length": 24,
+      "unit": "bits",
+      "description": "CoAP Observe Option (RFC 7641 Option 6)"
+    },
+    "COAP.NO_RESPONSE": {
+      "length": 8,
+      "unit": "bits",
+      "description": "CoAP No-Response Option (RFC 7967 Option 258)"
+    },
     "QUIC.FIRST_BYTE": {
       "length": 8,
       "unit": "bits",
