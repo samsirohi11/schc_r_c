@@ -20,7 +20,7 @@ pub use crate::parser::{Direction, FieldValue, StreamingParser, LinkLayer, parse
 pub use crate::tree::{TreeNode, BranchKey, BranchInfo, Branch, build_tree, END_MARKER, find_rule_ids_in_branch};
 pub use crate::tree_display::display_tree;
 pub use crate::compressor::{CompressedPacket, CompressionResult, FieldCompressionDetail, compress_with_rule};
-pub use crate::matcher::{values_match, msb_match, check_branch_match};
+pub use crate::matcher::{values_match, msb_match, check_branch_match, BranchMatchResult};
 
 // =============================================================================
 // Main Compression Entry Point
@@ -172,53 +172,74 @@ fn traverse_and_compress(
                 continue;
             }
 
-            if let Some((matched, field_value)) = check_branch_match(parser, &branch.info) {
-                if debug {
-                    let status = if matched { "✓" } else { "✗" };
-                    let mo_str = match branch.info.mo {
-                        MatchingOperator::Equal => "equal".to_string(),
-                        MatchingOperator::Ignore => "ignore".to_string(),
-                        MatchingOperator::MatchMapping => "mapping".to_string(),
-                        MatchingOperator::Msb(n) => format!("MSB({})", n),
-                    };
-                    
-                    // Build target string - show mapping array for match-mapping
-                    let target_str = if let Some(mapping_values) = &branch.info.mapping_tv {
-                        let mapping_strs: Vec<String> = mapping_values.iter()
-                            .map(|v| v.to_string_repr())
-                            .collect();
-                        format!("[{}]", mapping_strs.join(", "))
-                    } else {
-                        branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
-                    };
-                    
-                    // Only show target rule IDs for branches that don't match
-                    let rule_str = if !matched {
+            match check_branch_match(parser, &branch.info) {
+                BranchMatchResult::DiSkip => {
+                    // Direction Indicator doesn't match - skip this field entirely
+                    // Continue to children without parsing/advancing (DI-specific field doesn't apply)
+                    if debug {
+                        println!("{}├─ - {} [DI skip]: packet_dir={:?} field_di={:?}",
+                                 indent, branch.info.fid, parser.direction(), branch.info.di);
+                    }
+                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth);
+                }
+                BranchMatchResult::Matched(field_value) => {
+                    if debug {
+                        let mo_str = match branch.info.mo {
+                            MatchingOperator::Equal => "equal".to_string(),
+                            MatchingOperator::Ignore => "ignore".to_string(),
+                            MatchingOperator::MatchMapping => "mapping".to_string(),
+                            MatchingOperator::Msb(n) => format!("MSB({})", n),
+                        };
+                        let target_str = if let Some(mapping_values) = &branch.info.mapping_tv {
+                            let mapping_strs: Vec<String> = mapping_values.iter()
+                                .map(|v| v.to_string_repr())
+                                .collect();
+                            format!("[{}]", mapping_strs.join(", "))
+                        } else {
+                            branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
+                        };
+                        println!("{}├─ ✓ {} [{}]: packet={} target={}",
+                                 indent, branch.info.fid, mo_str,
+                                 field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
+                                 target_str);
+                    }
+                    if let Some(fv) = field_value {
+                        path.push((branch.info.fid, fv, branch.info.clone()));
+                    }
+                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1);
+                    path.pop();
+                }
+                BranchMatchResult::NotMatched(field_value) => {
+                    if debug {
+                        let mo_str = match branch.info.mo {
+                            MatchingOperator::Equal => "equal".to_string(),
+                            MatchingOperator::Ignore => "ignore".to_string(),
+                            MatchingOperator::MatchMapping => "mapping".to_string(),
+                            MatchingOperator::Msb(n) => format!("MSB({})", n),
+                        };
+                        let target_str = if let Some(mapping_values) = &branch.info.mapping_tv {
+                            let mapping_strs: Vec<String> = mapping_values.iter()
+                                .map(|v| v.to_string_repr())
+                                .collect();
+                            format!("[{}]", mapping_strs.join(", "))
+                        } else {
+                            branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
+                        };
                         let target_rules = find_rule_ids_in_branch(&branch.node);
-                        if target_rules.is_empty() {
+                        let rule_str = if target_rules.is_empty() {
                             String::new()
                         } else {
                             format!(" -> rule: {}", target_rules.iter()
                                 .map(|(id, len)| format!("{}/{}", id, len))
                                 .collect::<Vec<_>>()
                                 .join(", "))
-                        }
-                    } else {
-                        String::new()
-                    };
-                    
-                    println!("{}├─ {} {} [{}]: packet={} target={}{}",
-                             indent, status, branch.info.fid, mo_str,
-                             field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
-                             target_str, rule_str);
-                }
-
-                if matched {
-                    if let Some(fv) = field_value {
-                        path.push((branch.info.fid, fv, branch.info.clone()));
+                        };
+                        println!("{}├─ ✗ {} [{}]: packet={} target={}{}",
+                                 indent, branch.info.fid, mo_str,
+                                 field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
+                                 target_str, rule_str);
                     }
-                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1);
-                    path.pop();
+                    // No match, don't recurse
                 }
             }
         }

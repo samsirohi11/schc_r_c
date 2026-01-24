@@ -141,6 +141,8 @@ pub fn build_headers(
         } else if has_coap {
             let coap_header = build_coap_header(fields)?;
             let mut combined = coap_header;
+            // Note: The CoAP payload marker (0xFF) is part of the SCHC payload,
+            // not reconstructed by the packet builder. It passes through as-is.
             if let Some(p) = payload {
                 combined.extend_from_slice(p);
             }
@@ -172,6 +174,12 @@ pub fn build_headers(
     } else if has_coap {
         let coap_header = build_coap_header(fields)?;
         data.extend_from_slice(&coap_header);
+        // Add CoAP payload marker (0xFF) if there's a payload (RFC 7252)
+        if let Some(p) = payload {
+            if !p.is_empty() {
+                data.push(0xFF);
+            }
+        }
     }
 
     Ok(ReconstructedHeaders {
@@ -620,6 +628,152 @@ fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
 // CoAP Header Construction
 // =============================================================================
 
+/// CoAP option number mapping for known options (RFC 7252, RFC 7959, RFC 7641, RFC 7967)
+fn coap_option_number(fid: FieldId) -> Option<u16> {
+    match fid {
+        FieldId::CoapIfMatch => Some(1),
+        FieldId::CoapUriHost => Some(3),
+        FieldId::CoapEtag => Some(4),
+        FieldId::CoapIfNoneMatch => Some(5),
+        FieldId::CoapObserve => Some(6),
+        FieldId::CoapUriPort => Some(7),
+        FieldId::CoapLocationPath => Some(8),
+        FieldId::CoapUriPath => Some(11),
+        FieldId::CoapContentFormat => Some(12),
+        FieldId::CoapMaxAge => Some(14),
+        FieldId::CoapUriQuery => Some(15),
+        FieldId::CoapAccept => Some(17),
+        FieldId::CoapLocationQuery => Some(20),
+        FieldId::CoapBlock2 => Some(23),
+        FieldId::CoapBlock1 => Some(27),
+        FieldId::CoapSize2 => Some(28),
+        FieldId::CoapProxyUri => Some(35),
+        FieldId::CoapProxyScheme => Some(39),
+        FieldId::CoapSize1 => Some(60),
+        FieldId::CoapNoResponse => Some(258),
+        _ => None,
+    }
+}
+
+/// List of all CoAP option field IDs for iteration
+const COAP_OPTION_FIELDS: &[FieldId] = &[
+    FieldId::CoapIfMatch,
+    FieldId::CoapUriHost,
+    FieldId::CoapEtag,
+    FieldId::CoapIfNoneMatch,
+    FieldId::CoapObserve,
+    FieldId::CoapUriPort,
+    FieldId::CoapLocationPath,
+    FieldId::CoapUriPath,
+    FieldId::CoapContentFormat,
+    FieldId::CoapMaxAge,
+    FieldId::CoapUriQuery,
+    FieldId::CoapAccept,
+    FieldId::CoapLocationQuery,
+    FieldId::CoapBlock2,
+    FieldId::CoapBlock1,
+    FieldId::CoapSize2,
+    FieldId::CoapProxyUri,
+    FieldId::CoapProxyScheme,
+    FieldId::CoapSize1,
+    FieldId::CoapNoResponse,
+];
+
+/// Encode a CoAP option using delta encoding
+fn encode_coap_option(option_num: u16, prev_option_num: u16, value: &[u8]) -> Vec<u8> {
+    let delta = option_num.saturating_sub(prev_option_num);
+    let length = value.len();
+
+    let mut encoded = Vec::new();
+
+    // Encode delta and length in first byte
+    let delta_nibble = if delta < 13 {
+        delta as u8
+    } else if delta < 269 {
+        13
+    } else {
+        14
+    };
+
+    let length_nibble = if length < 13 {
+        length as u8
+    } else if length < 269 {
+        13
+    } else {
+        14
+    };
+
+    encoded.push((delta_nibble << 4) | length_nibble);
+
+    // Extended delta
+    if delta >= 13 && delta < 269 {
+        encoded.push((delta - 13) as u8);
+    } else if delta >= 269 {
+        let ext = delta - 269;
+        encoded.push((ext >> 8) as u8);
+        encoded.push((ext & 0xFF) as u8);
+    }
+
+    // Extended length
+    if length >= 13 && length < 269 {
+        encoded.push((length - 13) as u8);
+    } else if length >= 269 {
+        let ext = length - 269;
+        encoded.push((ext >> 8) as u8);
+        encoded.push((ext & 0xFF) as u8);
+    }
+
+    // Option value
+    encoded.extend_from_slice(value);
+
+    encoded
+}
+
+/// Convert a FieldValue to bytes for CoAP option encoding
+fn field_value_to_coap_bytes(value: &FieldValue) -> Vec<u8> {
+    match value {
+        FieldValue::U8(n) => {
+            if *n == 0 { vec![] } else { vec![*n] }
+        }
+        FieldValue::U16(n) => {
+            if *n == 0 {
+                vec![]
+            } else if *n <= 0xFF {
+                vec![*n as u8]
+            } else {
+                n.to_be_bytes().to_vec()
+            }
+        }
+        FieldValue::U32(n) => {
+            if *n == 0 {
+                vec![]
+            } else if *n <= 0xFF {
+                vec![*n as u8]
+            } else if *n <= 0xFFFF {
+                (*n as u16).to_be_bytes().to_vec()
+            } else if *n <= 0xFFFFFF {
+                vec![(*n >> 16) as u8, (*n >> 8) as u8, *n as u8]
+            } else {
+                n.to_be_bytes().to_vec()
+            }
+        }
+        FieldValue::U64(n) => {
+            // Minimal encoding for CoAP uint options
+            if *n == 0 {
+                vec![]
+            } else {
+                let bytes = n.to_be_bytes();
+                let start = bytes.iter().position(|&b| b != 0).unwrap_or(7);
+                bytes[start..].to_vec()
+            }
+        }
+        FieldValue::Bytes(b) => b.clone(),
+        FieldValue::Ipv4(addr) => addr.octets().to_vec(),
+        FieldValue::Ipv6(addr) => addr.octets().to_vec(),
+        FieldValue::ComputePlaceholder => vec![], // Computed fields produce empty option value
+    }
+}
+
 /// Build CoAP header from decompressed fields
 ///
 /// CoAP Header Format (RFC 7252):
@@ -631,6 +785,8 @@ fn build_quic_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// |   Token (if any, TKL bytes) ...
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   Options (if any) ...
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// ```
 fn build_coap_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     let ver = get_field_u8(fields, FieldId::CoapVer).unwrap_or(1);
@@ -639,7 +795,7 @@ fn build_coap_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     let code = get_field_u8(fields, FieldId::CoapCode).unwrap_or(0);
     let mid = get_field_u16(fields, FieldId::CoapMid).unwrap_or(0);
 
-    let mut header = Vec::with_capacity(4 + tkl as usize);
+    let mut header = Vec::with_capacity(4 + tkl as usize + 16); // Extra space for options
 
     // Byte 0: Ver (2 bits) | Type (2 bits) | TKL (4 bits)
     header.push((ver << 6) | ((msg_type & 0x03) << 4) | (tkl & 0x0F));
@@ -651,11 +807,34 @@ fn build_coap_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     header.extend_from_slice(&mid.to_be_bytes());
 
     // Token (TKL bytes)
-    if tkl > 0 
-        && let Some(FieldValue::Bytes(token)) = fields.get(&FieldId::CoapToken) {
-            let token_len = tkl.min(token.len() as u8) as usize;
-            header.extend_from_slice(&token[..token_len]);
+    if tkl > 0
+        && let Some(FieldValue::Bytes(token)) = fields.get(&FieldId::CoapToken)
+    {
+        let token_len = tkl.min(token.len() as u8) as usize;
+        header.extend_from_slice(&token[..token_len]);
+    }
+
+    // Collect options that have values in the fields hashmap
+    let mut options: Vec<(u16, Vec<u8>)> = Vec::new();
+    for &fid in COAP_OPTION_FIELDS {
+        if let Some(value) = fields.get(&fid) {
+            if let Some(opt_num) = coap_option_number(fid) {
+                let bytes = field_value_to_coap_bytes(value);
+                options.push((opt_num, bytes));
+            }
         }
+    }
+
+    // Sort options by option number (required for delta encoding)
+    options.sort_by_key(|(num, _)| *num);
+
+    // Encode options with delta encoding
+    let mut prev_option_num: u16 = 0;
+    for (opt_num, value) in options {
+        let encoded = encode_coap_option(opt_num, prev_option_num, &value);
+        header.extend_from_slice(&encoded);
+        prev_option_num = opt_num;
+    }
 
     Ok(header)
 }

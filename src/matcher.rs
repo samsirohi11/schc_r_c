@@ -24,6 +24,8 @@ pub fn values_match(packet_value: &FieldValue, target_value: &RuleValue) -> bool
         (FieldValue::U32(p), RuleValue::U64(t)) => *p as u64 == *t,
         (FieldValue::U64(p), RuleValue::U64(t)) => *p == *t,
         (FieldValue::Bytes(p), RuleValue::Bytes(t)) => p == t,
+        // String option values (e.g., CoAP Uri-Path) - compare bytes to string bytes
+        (FieldValue::Bytes(p), RuleValue::String(t)) => p == t.as_bytes(),
         (FieldValue::Ipv6(p_addr), RuleValue::Bytes(t_prefix)) => {
             let p_bytes = p_addr.octets();
             p_bytes.starts_with(t_prefix)
@@ -76,16 +78,26 @@ pub fn msb_match(pv: &FieldValue, tv: &RuleValue, bits: u8, fid: FieldId) -> boo
 // Branch Matching
 // =============================================================================
 
+/// Result of checking a branch match
+pub enum BranchMatchResult {
+    /// Field matched - contains the parsed field value
+    Matched(Option<FieldValue>),
+    /// Field didn't match - contains the parsed field value for debug display
+    NotMatched(Option<FieldValue>),
+    /// Direction Indicator mismatch - skip this field entirely, continue to children
+    DiSkip,
+}
+
 /// Check if a packet field matches a branch in the rule tree
-/// Returns (matched, field_value) - field_value is Some if the field was successfully parsed
+/// Returns a BranchMatchResult indicating match status or DI skip
 #[inline]
-pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> Option<(bool, Option<FieldValue>)> {
+pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> BranchMatchResult {
     // Check Direction Indicator (DI) - if branch specifies a direction, it must match packet direction
     // None (bidirectional) matches any packet direction
     if let Some(branch_di) = info.di
         && branch_di != parser.direction()
     {
-        return Some((false, None));
+        return BranchMatchResult::DiSkip;
     }
 
     // For QUIC.DCID on short headers, set the expected length from the rule's target value
@@ -97,8 +109,8 @@ pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> Op
 
     let packet_value = match parser.parse_field(info.fid) {
         Ok(Some(v)) => v.clone(),
-        Ok(None) => return Some((false, None)),
-        Err(_) => return Some((false, None)),
+        Ok(None) => return BranchMatchResult::NotMatched(None),
+        Err(_) => return BranchMatchResult::NotMatched(None),
     };
 
     let matched = match info.mo {
@@ -127,7 +139,11 @@ pub fn check_branch_match(parser: &mut StreamingParser, info: &BranchInfo) -> Op
         }
     };
 
-    Some((matched, Some(packet_value)))
+    if matched {
+        BranchMatchResult::Matched(Some(packet_value))
+    } else {
+        BranchMatchResult::NotMatched(Some(packet_value))
+    }
 }
 
 #[cfg(test)]

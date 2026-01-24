@@ -103,9 +103,24 @@ pub fn decompress_packet(
     
     // Decompress each field according to its CDA
     // Pass already-decompressed fields for QUIC CID length lookup
+    // Skip fields that don't match the current direction (DI filtering)
     let mut fields: HashMap<FieldId, FieldValue> = HashMap::new();
-    
+
     for field in &rule.compression {
+        // Check direction indicator - skip fields that don't apply to this direction
+        // field.di = None means bidirectional (applies to both directions)
+        // field.di = Some(Direction::Up) means only for uplink
+        // field.di = Some(Direction::Down) means only for downlink
+        let field_applies = match field.di {
+            None => true, // Bidirectional - always applies
+            Some(field_dir) => field_dir == direction,
+        };
+
+        if !field_applies {
+            // Skip this field for this direction
+            continue;
+        }
+
         let value = decompress_field(bits, &mut bit_pos, field, &fields)?;
         fields.insert(field.fid, value);
     }
@@ -459,10 +474,10 @@ fn rule_value_to_field_value(rv: &RuleValue, fid: FieldId) -> Result<FieldValue>
                 _ => Ok(FieldValue::Bytes(bytes.clone())),
             }
         }
-        RuleValue::String(_) => {
-            Err(SchcError::Decompression(format!(
-                "Cannot convert string TV to field value for {}", fid
-            )))
+        RuleValue::String(s) => {
+            // String TVs are used for CoAP options like Uri-Path
+            // Convert to bytes for field value
+            Ok(FieldValue::Bytes(s.as_bytes().to_vec()))
         }
     }
 }

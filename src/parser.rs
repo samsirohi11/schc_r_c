@@ -131,11 +131,13 @@ pub struct QuicContext {
 // CoAP Context
 // =============================================================================
 
-/// CoAP parsing context to track token length across field parsing
+/// CoAP parsing context to track token length and options across field parsing
 #[derive(Debug, Clone, Default)]
 pub struct CoapContext {
     /// Cached TKL (Token Length) from CoAP header (0-8)
     pub tkl: Option<u8>,
+    /// Cached CoAP options: (option_number, value)
+    pub options: Option<Vec<(u16, Vec<u8>)>>,
 }
 
 // =============================================================================
@@ -342,13 +344,35 @@ impl<'a> StreamingParser<'a> {
             | FieldId::QuicScidLen
             | FieldId::QuicScid => self.extract_quic_field(fid),
 
-            // CoAP Fields
+            // CoAP Header Fields
             FieldId::CoapVer
             | FieldId::CoapType
             | FieldId::CoapTkl
             | FieldId::CoapCode
             | FieldId::CoapMid
             | FieldId::CoapToken => self.extract_coap_field(fid),
+
+            // CoAP Option Fields
+            FieldId::CoapUriPath
+            | FieldId::CoapContentFormat
+            | FieldId::CoapUriHost
+            | FieldId::CoapUriPort
+            | FieldId::CoapUriQuery
+            | FieldId::CoapAccept
+            | FieldId::CoapLocationPath
+            | FieldId::CoapLocationQuery
+            | FieldId::CoapMaxAge
+            | FieldId::CoapEtag
+            | FieldId::CoapIfMatch
+            | FieldId::CoapIfNoneMatch
+            | FieldId::CoapObserve
+            | FieldId::CoapBlock1
+            | FieldId::CoapBlock2
+            | FieldId::CoapSize1
+            | FieldId::CoapSize2
+            | FieldId::CoapNoResponse
+            | FieldId::CoapProxyUri
+            | FieldId::CoapProxyScheme => self.extract_coap_option(fid),
 
             // ICMPv6 Fields
             FieldId::Icmpv6Type
@@ -881,6 +905,249 @@ impl<'a> StreamingParser<'a> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Map FieldId to CoAP option number (RFC 7252)
+    fn field_id_to_coap_option_num(fid: FieldId) -> Option<u16> {
+        match fid {
+            FieldId::CoapIfMatch => Some(1),
+            FieldId::CoapUriHost => Some(3),
+            FieldId::CoapEtag => Some(4),
+            FieldId::CoapIfNoneMatch => Some(5),
+            FieldId::CoapObserve => Some(6),
+            FieldId::CoapUriPort => Some(7),
+            FieldId::CoapLocationPath => Some(8),
+            FieldId::CoapUriPath => Some(11),
+            FieldId::CoapContentFormat => Some(12),
+            FieldId::CoapMaxAge => Some(14),
+            FieldId::CoapUriQuery => Some(15),
+            FieldId::CoapAccept => Some(17),
+            FieldId::CoapLocationQuery => Some(20),
+            FieldId::CoapBlock2 => Some(23),
+            FieldId::CoapBlock1 => Some(27),
+            FieldId::CoapSize2 => Some(28),
+            FieldId::CoapProxyUri => Some(35),
+            FieldId::CoapProxyScheme => Some(39),
+            FieldId::CoapSize1 => Some(60),
+            FieldId::CoapNoResponse => Some(258),
+            _ => None,
+        }
+    }
+
+    /// Extract a CoAP option field value
+    ///
+    /// Parses CoAP options on demand and caches them in the context.
+    /// For repeatable options (e.g., Uri-Path), returns the concatenated value.
+    fn extract_coap_option(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
+        let coap_start = match self.get_coap_start() {
+            Ok(Some(start)) => start,
+            Ok(None) => return Ok(None), // Not a CoAP packet (wrong ports)
+            Err(_) => return Ok(None),   // Not a UDP packet
+        };
+
+        if coap_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        // Parse options if not already cached
+        if self.coap_ctx.options.is_none() {
+            self.parse_coap_options(coap_start)?;
+        }
+
+        let target_option_num = match Self::field_id_to_coap_option_num(fid) {
+            Some(num) => num,
+            None => return Ok(None),
+        };
+
+        // Find all options with the matching number
+        if let Some(ref options) = self.coap_ctx.options {
+            let matching_options: Vec<&Vec<u8>> = options
+                .iter()
+                .filter(|(num, _)| *num == target_option_num)
+                .map(|(_, val)| val)
+                .collect();
+
+            if matching_options.is_empty() {
+                return Ok(None);
+            }
+
+            // For most options, return the first value
+            // For repeatable options like Uri-Path, concatenate with "/"
+            match fid {
+                FieldId::CoapUriPath => {
+                    // Uri-Path segments are concatenated with "/"
+                    let path = matching_options
+                        .iter()
+                        .filter_map(|v| std::str::from_utf8(v).ok())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if path.is_empty() {
+                        return Ok(None);
+                    }
+                    Ok(Some(FieldValue::Bytes(path.into_bytes())))
+                }
+                FieldId::CoapContentFormat | FieldId::CoapAccept | FieldId::CoapUriPort => {
+                    // Integer options (0-2 bytes)
+                    let val = matching_options[0];
+                    let num = match val.len() {
+                        0 => 0u16,
+                        1 => val[0] as u16,
+                        2 => u16::from_be_bytes([val[0], val[1]]),
+                        _ => return Ok(None),
+                    };
+                    Ok(Some(FieldValue::U16(num)))
+                }
+                FieldId::CoapMaxAge | FieldId::CoapSize1 | FieldId::CoapSize2 => {
+                    // Larger integer options (0-4 bytes)
+                    let val = matching_options[0];
+                    let num = match val.len() {
+                        0 => 0u32,
+                        1 => val[0] as u32,
+                        2 => u16::from_be_bytes([val[0], val[1]]) as u32,
+                        3 => u32::from_be_bytes([0, val[0], val[1], val[2]]),
+                        4 => u32::from_be_bytes([val[0], val[1], val[2], val[3]]),
+                        _ => return Ok(None),
+                    };
+                    Ok(Some(FieldValue::U32(num)))
+                }
+                FieldId::CoapBlock1 | FieldId::CoapBlock2 => {
+                    // Block options (1-3 bytes, encoded as uint)
+                    let val = matching_options[0];
+                    let num = match val.len() {
+                        1 => val[0] as u32,
+                        2 => u16::from_be_bytes([val[0], val[1]]) as u32,
+                        3 => u32::from_be_bytes([0, val[0], val[1], val[2]]),
+                        _ => return Ok(None),
+                    };
+                    Ok(Some(FieldValue::U32(num)))
+                }
+                FieldId::CoapObserve => {
+                    // Observe option (0-3 bytes)
+                    let val = matching_options[0];
+                    let num = match val.len() {
+                        0 => 0u32,
+                        1 => val[0] as u32,
+                        2 => u16::from_be_bytes([val[0], val[1]]) as u32,
+                        3 => u32::from_be_bytes([0, val[0], val[1], val[2]]),
+                        _ => return Ok(None),
+                    };
+                    Ok(Some(FieldValue::U32(num)))
+                }
+                FieldId::CoapNoResponse => {
+                    // No-Response (0-1 byte)
+                    let val = matching_options[0];
+                    let num = if val.is_empty() { 0u8 } else { val[0] };
+                    Ok(Some(FieldValue::U8(num)))
+                }
+                FieldId::CoapIfNoneMatch => {
+                    // Empty option (present = true)
+                    Ok(Some(FieldValue::Bytes(Vec::new())))
+                }
+                _ => {
+                    // Default: return raw bytes
+                    Ok(Some(FieldValue::Bytes(matching_options[0].clone())))
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Parse all CoAP options from the packet
+    ///
+    /// CoAP options format (RFC 7252):
+    /// - Each option: Delta(4b)|Length(4b), [extended delta], [extended length], value
+    /// - Delta is relative to previous option number
+    /// - Payload marker: 0xFF
+    fn parse_coap_options(&mut self, coap_start: usize) -> Result<()> {
+        let coap_data = &self.raw[coap_start..];
+        if coap_data.len() < 4 {
+            self.coap_ctx.options = Some(Vec::new());
+            return Ok(());
+        }
+
+        // Get TKL to find options start
+        let tkl = (coap_data[0] & 0x0F) as usize;
+        if tkl > 8 {
+            self.coap_ctx.options = Some(Vec::new());
+            return Ok(());
+        }
+
+        let options_start = 4 + tkl; // Header (4) + Token (TKL)
+        if options_start >= coap_data.len() {
+            self.coap_ctx.options = Some(Vec::new());
+            return Ok(());
+        }
+
+        let mut options = Vec::new();
+        let mut pos = options_start;
+        let mut current_option_num: u16 = 0;
+
+        while pos < coap_data.len() {
+            let first_byte = coap_data[pos];
+
+            // Check for payload marker
+            if first_byte == 0xFF {
+                break;
+            }
+
+            let delta_nibble = (first_byte >> 4) & 0x0F;
+            let length_nibble = first_byte & 0x0F;
+            pos += 1;
+
+            // Parse delta
+            let delta: u16 = match delta_nibble {
+                0..=12 => delta_nibble as u16,
+                13 => {
+                    if pos >= coap_data.len() { break; }
+                    let ext = coap_data[pos] as u16 + 13;
+                    pos += 1;
+                    ext
+                }
+                14 => {
+                    if pos + 1 >= coap_data.len() { break; }
+                    let ext = u16::from_be_bytes([coap_data[pos], coap_data[pos + 1]]) + 269;
+                    pos += 2;
+                    ext
+                }
+                15 => break, // Reserved for payload marker (already checked above)
+                _ => unreachable!(),
+            };
+
+            // Parse length
+            let length: usize = match length_nibble {
+                0..=12 => length_nibble as usize,
+                13 => {
+                    if pos >= coap_data.len() { break; }
+                    let ext = coap_data[pos] as usize + 13;
+                    pos += 1;
+                    ext
+                }
+                14 => {
+                    if pos + 1 >= coap_data.len() { break; }
+                    let ext = u16::from_be_bytes([coap_data[pos], coap_data[pos + 1]]) as usize + 269;
+                    pos += 2;
+                    ext
+                }
+                15 => break, // Reserved for payload marker
+                _ => unreachable!(),
+            };
+
+            // Update current option number
+            current_option_num = current_option_num.saturating_add(delta);
+
+            // Extract option value
+            if pos + length > coap_data.len() {
+                break;
+            }
+            let value = coap_data[pos..pos + length].to_vec();
+            pos += length;
+
+            options.push((current_option_num, value));
+        }
+
+        self.coap_ctx.options = Some(options);
+        Ok(())
     }
 
     // =========================================================================
