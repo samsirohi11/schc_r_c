@@ -141,9 +141,13 @@ pub fn build_headers(
         } else if has_coap {
             let coap_header = build_coap_header(fields)?;
             let mut combined = coap_header;
-            // Note: The CoAP payload marker (0xFF) is part of the SCHC payload,
-            // not reconstructed by the packet builder. It passes through as-is.
+            // Add CoAP payload marker (0xFF) if there's a payload (RFC 7252)
+            // The SCHC compressor excludes the 0xFF marker from the payload,
+            // so it must be reconstructed here during decompression.
             if let Some(p) = payload {
+                if !p.is_empty() {
+                    combined.push(0xFF);
+                }
                 combined.extend_from_slice(p);
             }
             combined
@@ -175,6 +179,8 @@ pub fn build_headers(
         let coap_header = build_coap_header(fields)?;
         data.extend_from_slice(&coap_header);
         // Add CoAP payload marker (0xFF) if there's a payload (RFC 7252)
+        // The SCHC compressor excludes the 0xFF marker from the payload,
+        // so it must be reconstructed here during decompression.
         if let Some(p) = payload {
             if !p.is_empty() {
                 data.push(0xFF);

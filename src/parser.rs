@@ -138,6 +138,9 @@ pub struct CoapContext {
     pub tkl: Option<u8>,
     /// Cached CoAP options: (option_number, value)
     pub options: Option<Vec<(u16, Vec<u8>)>>,
+    /// Offset where CoAP payload starts (after header + token + options + 0xFF marker)
+    /// This is the absolute offset in the raw packet
+    pub payload_start: Option<usize>,
 }
 
 // =============================================================================
@@ -552,8 +555,21 @@ impl<'a> StreamingParser<'a> {
     }
 
     /// Get the payload bytes from the packet
-    /// Returns the data after all protocol headers (IP + transport)
+    /// Returns the data after all protocol headers (IP + transport + application layer)
+    ///
+    /// If CoAP fields were parsed, returns the CoAP application payload (after header + token + options).
+    /// Otherwise returns the data after the transport header.
     pub fn payload(&mut self) -> Result<&[u8]> {
+        // If CoAP was parsed, use the CoAP payload start
+        if let Some(coap_payload_start) = self.coap_ctx.payload_start {
+            if coap_payload_start <= self.raw.len() {
+                return Ok(&self.raw[coap_payload_start..]);
+            } else {
+                return Ok(&[]);
+            }
+        }
+
+        // Fall back to transport layer payload
         let payload_start = self.payload_start()?;
         if payload_start <= self.raw.len() {
             Ok(&self.raw[payload_start..])
@@ -883,6 +899,12 @@ impl<'a> StreamingParser<'a> {
         // Cache TKL for token parsing
         self.coap_ctx.tkl = Some(tkl);
 
+        // Parse options to set payload_start (needed for SCHC payload calculation)
+        // This is done lazily - only once when first CoAP field is accessed
+        if self.coap_ctx.payload_start.is_none() {
+            self.parse_coap_options(coap_start)?;
+        }
+
         match fid {
             FieldId::CoapVer => Ok(Some(FieldValue::U8(ver))),
             FieldId::CoapType => Ok(Some(FieldValue::U8(msg_type))),
@@ -1063,6 +1085,8 @@ impl<'a> StreamingParser<'a> {
         let coap_data = &self.raw[coap_start..];
         if coap_data.len() < 4 {
             self.coap_ctx.options = Some(Vec::new());
+            // Payload starts right after the partial header
+            self.coap_ctx.payload_start = Some(coap_start + coap_data.len());
             return Ok(());
         }
 
@@ -1070,12 +1094,16 @@ impl<'a> StreamingParser<'a> {
         let tkl = (coap_data[0] & 0x0F) as usize;
         if tkl > 8 {
             self.coap_ctx.options = Some(Vec::new());
+            // Invalid TKL, payload is whatever comes after header
+            self.coap_ctx.payload_start = Some(coap_start + 4);
             return Ok(());
         }
 
         let options_start = 4 + tkl; // Header (4) + Token (TKL)
         if options_start >= coap_data.len() {
             self.coap_ctx.options = Some(Vec::new());
+            // No options, payload starts after header + token
+            self.coap_ctx.payload_start = Some(coap_start + options_start);
             return Ok(());
         }
 
@@ -1088,6 +1116,8 @@ impl<'a> StreamingParser<'a> {
 
             // Check for payload marker
             if first_byte == 0xFF {
+                // Payload starts after the 0xFF marker
+                pos += 1;
                 break;
             }
 
@@ -1147,6 +1177,8 @@ impl<'a> StreamingParser<'a> {
         }
 
         self.coap_ctx.options = Some(options);
+        // pos now points to the CoAP application payload (after options and 0xFF marker if present)
+        self.coap_ctx.payload_start = Some(coap_start + pos);
         Ok(())
     }
 
