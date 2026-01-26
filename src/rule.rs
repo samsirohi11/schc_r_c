@@ -93,6 +93,7 @@ pub struct Field {
     pub cda: CompressionAction,
 
     #[serde(rename = "MO.val")]
+    #[serde(alias = "MO_VAL")]
     pub mo_val: Option<u8>,
 
     #[serde(skip)]
@@ -238,11 +239,11 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(match s.as_str() {
+    Ok(match s.to_lowercase().as_str() {
         "equal" => MatchingOperator::Equal,
         "ignore" => MatchingOperator::Ignore,
         "match-mapping" => MatchingOperator::MatchMapping,
-        "MSB" => MatchingOperator::Msb(0),
+        "msb" => MatchingOperator::Msb(0),
         _ => MatchingOperator::Ignore,
     })
 }
@@ -265,11 +266,11 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    Ok(match s.as_str() {
+    Ok(match s.to_lowercase().as_str() {
         "not-sent" => CompressionAction::NotSent,
         "value-sent" => CompressionAction::ValueSent,
         "mapping-sent" => CompressionAction::MappingSent,
-        "LSB" => CompressionAction::Lsb,
+        "lsb" => CompressionAction::Lsb,
         "compute" => CompressionAction::Compute,
         _ => CompressionAction::ValueSent,
     })
