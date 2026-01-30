@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use crate::bit_buffer::BitBuffer;
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
-use crate::parser::{FieldValue, Direction};
-use crate::rule::{Rule, Field, FieldLength, CompressionAction, ParsedTargetValue, RuleValue};
+use crate::parser::{Direction, FieldValue};
+use crate::rule::{CompressionAction, Field, FieldLength, ParsedTargetValue, Rule, RuleValue};
 
 // =============================================================================
 // Decompression Result Types
@@ -40,26 +40,28 @@ pub struct DecompressedPacket {
 // =============================================================================
 
 /// Match a rule ID from compressed data using variable-length matching
-/// 
+///
 /// Rules are checked in order of decreasing rule_id_length (most specific first).
 /// This allows for variable-length rule ID encoding as per RFC 8724.
 pub fn match_rule_id<'a>(data: &[u8], rules: &'a [Rule]) -> Result<&'a Rule> {
     if data.is_empty() {
-        return Err(SchcError::Decompression("Empty compressed data".to_string()));
+        return Err(SchcError::Decompression(
+            "Empty compressed data".to_string(),
+        ));
     }
-    
+
     let bits = BitSlice::<_, Msb0>::from_slice(data);
-    
+
     // Sort rules by rule_id_length descending for proper variable-length matching
     let mut sorted_rules: Vec<&Rule> = rules.iter().collect();
     sorted_rules.sort_by(|a, b| b.rule_id_length.cmp(&a.rule_id_length));
-    
+
     for rule in sorted_rules {
         let id_len = rule.rule_id_length as usize;
         if bits.len() < id_len {
             continue;
         }
-        
+
         // Extract rule_id_length bits from the beginning
         let mut extracted_id: u32 = 0;
         for i in 0..id_len {
@@ -67,13 +69,15 @@ pub fn match_rule_id<'a>(data: &[u8], rules: &'a [Rule]) -> Result<&'a Rule> {
                 extracted_id |= 1 << (id_len - 1 - i);
             }
         }
-        
+
         if extracted_id == rule.rule_id {
             return Ok(rule);
         }
     }
-    
-    Err(SchcError::Decompression("No matching rule ID found".to_string()))
+
+    Err(SchcError::Decompression(
+        "No matching rule ID found".to_string(),
+    ))
 }
 
 // =============================================================================
@@ -161,24 +165,15 @@ fn decompress_field(
     rule_entries: &[Field],
 ) -> Result<FieldValue> {
     match field.cda {
-        CompressionAction::NotSent => {
-            restore_from_tv(field)
-        }
+        CompressionAction::NotSent => restore_from_tv(field),
         CompressionAction::ValueSent => {
-            let field_bits = get_field_size_bits_with_context_and_rule(
-                field, decompressed_fields, rule_entries,
-            );
+            let field_bits =
+                get_field_size_bits_with_context_and_rule(field, decompressed_fields, rule_entries);
             read_field_value(buf, field_bits, field.fid)
         }
-        CompressionAction::MappingSent => {
-            decompress_mapping(buf, field)
-        }
-        CompressionAction::Lsb => {
-            decompress_lsb(buf, field)
-        }
-        CompressionAction::Compute => {
-            Ok(FieldValue::ComputePlaceholder)
-        }
+        CompressionAction::MappingSent => decompress_mapping(buf, field),
+        CompressionAction::Lsb => decompress_lsb(buf, field),
+        CompressionAction::Compute => Ok(FieldValue::ComputePlaceholder),
     }
 }
 
@@ -186,29 +181,25 @@ fn decompress_field(
 fn restore_from_tv(field: &Field) -> Result<FieldValue> {
     match &field.parsed_tv {
         Some(ParsedTargetValue::Single(rv)) => rule_value_to_field_value(rv, field.fid),
-        Some(ParsedTargetValue::Mapping(_)) => {
-            Err(SchcError::Decompression(format!(
-                "Field {} has not-sent CDA but mapping TV", field.fid
-            )))
-        }
-        None => {
-            Err(SchcError::Decompression(format!(
-                "Field {} has not-sent CDA but no TV", field.fid
-            )))
-        }
+        Some(ParsedTargetValue::Mapping(_)) => Err(SchcError::Decompression(format!(
+            "Field {} has not-sent CDA but mapping TV",
+            field.fid
+        ))),
+        None => Err(SchcError::Decompression(format!(
+            "Field {} has not-sent CDA but no TV",
+            field.fid
+        ))),
     }
 }
 
 /// Decompress mapping-sent field (read index, lookup TV)
-fn decompress_mapping(
-    buf: &mut BitBuffer,
-    field: &Field,
-) -> Result<FieldValue> {
+fn decompress_mapping(buf: &mut BitBuffer, field: &Field) -> Result<FieldValue> {
     if let Some(ParsedTargetValue::Mapping(tv_list)) = &field.parsed_tv {
         let num_items = tv_list.len();
         if num_items == 0 {
             return Err(SchcError::Decompression(format!(
-                "Field {} has empty mapping", field.fid
+                "Field {} has empty mapping",
+                field.fid
             )));
         }
 
@@ -219,10 +210,12 @@ fn decompress_mapping(
         };
 
         let index = if index_bits > 0 {
-            buf.read_bits(index_bits)
-                .ok_or_else(|| SchcError::Decompression(format!(
-                    "Field {} not enough bits for mapping index", field.fid
-                )))? as usize
+            buf.read_bits(index_bits).ok_or_else(|| {
+                SchcError::Decompression(format!(
+                    "Field {} not enough bits for mapping index",
+                    field.fid
+                ))
+            })? as usize
         } else {
             0
         };
@@ -230,23 +223,23 @@ fn decompress_mapping(
         if index >= tv_list.len() {
             return Err(SchcError::Decompression(format!(
                 "Field {} mapping index {} out of bounds (max: {})",
-                field.fid, index, tv_list.len() - 1
+                field.fid,
+                index,
+                tv_list.len() - 1
             )));
         }
 
         rule_value_to_field_value(&tv_list[index], field.fid)
     } else {
         Err(SchcError::Decompression(format!(
-            "Field {} has mapping-sent CDA but no mapping TV", field.fid
+            "Field {} has mapping-sent CDA but no mapping TV",
+            field.fid
         )))
     }
 }
 
 /// Decompress LSB field (combine MSB from TV + LSB from residue)
-fn decompress_lsb(
-    buf: &mut BitBuffer,
-    field: &Field,
-) -> Result<FieldValue> {
+fn decompress_lsb(buf: &mut BitBuffer, field: &Field) -> Result<FieldValue> {
     let msb_bits = field.mo_val.unwrap_or(0) as usize;
     let field_size = get_field_size_bits(field) as usize;
 
@@ -260,23 +253,26 @@ fn decompress_lsb(
     let lsb_bits = field_size - msb_bits;
 
     let msb_value = match &field.parsed_tv {
-        Some(ParsedTargetValue::Single(rv)) => {
-            match rv {
-                RuleValue::U64(v) => *v,
-                _ => return Err(SchcError::Decompression(format!(
-                    "Field {} has non-numeric TV for LSB", field.fid
-                ))),
+        Some(ParsedTargetValue::Single(rv)) => match rv {
+            RuleValue::U64(v) => *v,
+            _ => {
+                return Err(SchcError::Decompression(format!(
+                    "Field {} has non-numeric TV for LSB",
+                    field.fid
+                )))
             }
+        },
+        _ => {
+            return Err(SchcError::Decompression(format!(
+                "Field {} has LSB CDA but no TV",
+                field.fid
+            )))
         }
-        _ => return Err(SchcError::Decompression(format!(
-            "Field {} has LSB CDA but no TV", field.fid
-        ))),
     };
 
-    let lsb_value = buf.read_bits(lsb_bits)
-        .ok_or_else(|| SchcError::Decompression(format!(
-            "Field {} not enough bits for LSB", field.fid
-        )))?;
+    let lsb_value = buf.read_bits(lsb_bits).ok_or_else(|| {
+        SchcError::Decompression(format!("Field {} not enough bits for LSB", field.fid))
+    })?;
 
     let msb_mask = ((1u64 << msb_bits) - 1) << lsb_bits;
     let combined = (msb_value & msb_mask) | lsb_value;
@@ -294,34 +290,43 @@ fn decompress_lsb(
 // =============================================================================
 
 /// Read field value from BitBuffer based on field ID type
-fn read_field_value(
-    buf: &mut BitBuffer,
-    n_bits: u16,
-    fid: FieldId,
-) -> Result<FieldValue> {
+fn read_field_value(buf: &mut BitBuffer, n_bits: u16, fid: FieldId) -> Result<FieldValue> {
     let n = n_bits as usize;
 
     // Check if this is an address/bytes field that needs bytes
-    let is_bytes_field = matches!(fid,
-        FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App |
-        FieldId::Ipv6Src | FieldId::Ipv6Dst |
-        FieldId::Ipv6SrcPrefix | FieldId::Ipv6DstPrefix |
-        FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix |
-        FieldId::Ipv6SrcIid | FieldId::Ipv6DstIid |
-        FieldId::Ipv6DevIid | FieldId::Ipv6AppIid |
-        FieldId::QuicDcid | FieldId::QuicScid |
-        FieldId::CoapToken |
-        FieldId::Icmpv6Payload
+    let is_bytes_field = matches!(
+        fid,
+        FieldId::Ipv4Src
+            | FieldId::Ipv4Dst
+            | FieldId::Ipv4Dev
+            | FieldId::Ipv4App
+            | FieldId::Ipv6Src
+            | FieldId::Ipv6Dst
+            | FieldId::Ipv6SrcPrefix
+            | FieldId::Ipv6DstPrefix
+            | FieldId::Ipv6DevPrefix
+            | FieldId::Ipv6AppPrefix
+            | FieldId::Ipv6SrcIid
+            | FieldId::Ipv6DstIid
+            | FieldId::Ipv6DevIid
+            | FieldId::Ipv6AppIid
+            | FieldId::QuicDcid
+            | FieldId::QuicScid
+            | FieldId::CoapToken
+            | FieldId::Icmpv6Payload
     );
 
     if is_bytes_field || n > 64 {
-        let bytes = buf.read_bits_as_bytes(n)
+        let bytes = buf
+            .read_bits_as_bytes(n)
             .ok_or_else(|| SchcError::Decompression("Not enough bits for field".to_string()))?;
 
         match fid {
-            FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App if bytes.len() == 4 => {
+            FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App
+                if bytes.len() == 4 =>
+            {
                 Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
-                    bytes[0], bytes[1], bytes[2], bytes[3]
+                    bytes[0], bytes[1], bytes[2], bytes[3],
                 )))
             }
             FieldId::Ipv6Src | FieldId::Ipv6Dst if bytes.len() == 16 => {
@@ -332,11 +337,14 @@ fn read_field_value(
             _ => Ok(FieldValue::Bytes(bytes)),
         }
     } else {
-        let value = buf.read_bits(n)
-            .ok_or_else(|| SchcError::Decompression(format!(
+        let value = buf.read_bits(n).ok_or_else(|| {
+            SchcError::Decompression(format!(
                 "Not enough bits: need {} at position {}, have {}",
-                n, buf.position(), buf.remaining() + buf.position()
-            )))?;
+                n,
+                buf.position(),
+                buf.remaining() + buf.position()
+            ))
+        })?;
 
         Ok(match n {
             1..=8 => FieldValue::U8(value as u8),
@@ -457,7 +465,9 @@ fn get_field_size_bits_with_context_and_rule(
 ) -> u16 {
     // Priority: 1. fl_func (dynamic length function)
     if let Some(ref fl_func) = field.fl_func {
-        if let Some(bits) = resolve_field_length_with_rule(fl_func, decompressed_fields, rule_entries) {
+        if let Some(bits) =
+            resolve_field_length_with_rule(fl_func, decompressed_fields, rule_entries)
+        {
             return bits;
         }
     }
@@ -503,21 +513,21 @@ fn rule_value_to_field_value(rv: &RuleValue, fid: FieldId) -> Result<FieldValue>
                 _ => FieldValue::U64(*v),
             })
         }
-        RuleValue::Bytes(bytes) => {
-            match fid {
-                FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App if bytes.len() == 4 => {
-                    Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
-                        bytes[0], bytes[1], bytes[2], bytes[3]
-                    )))
-                }
-                FieldId::Ipv6Src | FieldId::Ipv6Dst if bytes.len() == 16 => {
-                    let mut arr = [0u8; 16];
-                    arr.copy_from_slice(bytes);
-                    Ok(FieldValue::Ipv6(std::net::Ipv6Addr::from(arr)))
-                }
-                _ => Ok(FieldValue::Bytes(bytes.clone())),
+        RuleValue::Bytes(bytes) => match fid {
+            FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App
+                if bytes.len() == 4 =>
+            {
+                Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                )))
             }
-        }
+            FieldId::Ipv6Src | FieldId::Ipv6Dst if bytes.len() == 16 => {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(bytes);
+                Ok(FieldValue::Ipv6(std::net::Ipv6Addr::from(arr)))
+            }
+            _ => Ok(FieldValue::Bytes(bytes.clone())),
+        },
         RuleValue::String(s) => {
             // String TVs are used for CoAP options like Uri-Path
             // Convert to bytes for field value
@@ -547,7 +557,7 @@ fn build_header(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rule::{MatchingOperator, Rule, Field};
+    use crate::rule::{Field, MatchingOperator, Rule};
 
     fn create_test_rule(rule_id: u32, rule_id_length: u8, fields: Vec<Field>) -> Rule {
         Rule {
@@ -599,10 +609,10 @@ mod tests {
     #[test]
     fn test_match_rule_id_variable_length() {
         let rules = vec![
-            create_test_rule(0, 2, vec![]),   // 2-bit: 00
-            create_test_rule(1, 2, vec![]),   // 2-bit: 01
-            create_test_rule(4, 3, vec![]),   // 3-bit: 100
-            create_test_rule(12, 4, vec![]),  // 4-bit: 1100
+            create_test_rule(0, 2, vec![]),  // 2-bit: 00
+            create_test_rule(1, 2, vec![]),  // 2-bit: 01
+            create_test_rule(4, 3, vec![]),  // 3-bit: 100
+            create_test_rule(12, 4, vec![]), // 4-bit: 1100
         ];
 
         // 2-bit rule ID = 0 (binary: 00...)
@@ -620,9 +630,7 @@ mod tests {
 
     #[test]
     fn test_match_rule_id_no_match() {
-        let rules = vec![
-            create_test_rule(1, 8, vec![]),
-        ];
+        let rules = vec![create_test_rule(1, 8, vec![])];
 
         let data = vec![0x02];
         let result = match_rule_id(&data, &rules);

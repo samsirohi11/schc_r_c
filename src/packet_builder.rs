@@ -137,25 +137,29 @@ pub fn build_headers(
 
     // Build transport header
     if has_udp {
-        // For UDP, the "payload" for length & checksum must include app layer header + actual payload
-        let udp_payload: Vec<u8> = if has_quic {
-            let quic_header = build_quic_header(fields)?;
-            let mut combined = quic_header;
-            if let Some(p) = payload {
-                combined.extend_from_slice(p);
-            }
-            combined
+        // Build the application layer headers (without payload) for the returned data
+        let app_header: Vec<u8> = if has_quic {
+            build_quic_header(fields)?
         } else if has_coap {
-            let coap_header = build_coap_header(fields)?;
-            let mut combined = coap_header;
+            let mut coap_header = build_coap_header(fields)?;
             // Add CoAP payload marker (0xFF) if there's a payload AND CoAP options
             // were reconstructed from decompressed fields (RFC 7252).
             // When no options are in the rule, the 0xFF marker is already in the payload.
             let has_coap_options = COAP_OPTION_FIELDS.iter().any(|fid| fields.contains_key(fid));
             if let Some(p) = payload {
                 if !p.is_empty() && has_coap_options {
-                    combined.push(0xFF);
+                    coap_header.push(0xFF);
                 }
+            }
+            coap_header
+        } else {
+            Vec::new()
+        };
+
+        // Build the full UDP payload (app header + actual payload) for length/checksum calculation
+        let udp_payload_for_calc: Vec<u8> = if has_quic || has_coap {
+            let mut combined = app_header.clone();
+            if let Some(p) = payload {
                 combined.extend_from_slice(p);
             }
             combined
@@ -170,19 +174,21 @@ pub fn build_headers(
             direction,
             &ip_header,
             ip_version,
-            Some(&udp_payload),
-)?;
+            Some(&udp_payload_for_calc),
+        )?;
         data.extend_from_slice(&udp_header);
-        data.extend_from_slice(&udp_payload);
+        
+        // Add the app layer header (without the payload - payload is appended separately by caller)
+        if has_quic || has_coap {
+            data.extend_from_slice(&app_header);
+        }
     } else if has_icmpv6 {
         // ICMPv6 is directly over IPv6
+        // For ICMPv6, we need to include the payload in the header data
+        // because ICMPv6 payload format varies by type
         let icmpv6_header = build_icmpv6_header(fields, &ip_header, payload)?;
         data.extend_from_slice(&icmpv6_header);
     }
-
-// Note: Application layer (QUIC/CoAP) is already included in the UDP payload above.
-    // The UDP payload calculation properly includes the full CoAP/QUIC header + payload.
-    // We must NOT add it again here to avoid duplication.
 
     Ok(ReconstructedHeaders {
         data,
