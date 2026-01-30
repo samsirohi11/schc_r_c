@@ -7,6 +7,26 @@ use crate::error::Result;
 use crate::field_id::FieldId;
 use crate::parser::Direction;
 
+/// Dynamic field length function (RFC 8724 / RFC 8824)
+///
+/// When a field's length is not fixed at rule creation time, a FieldLength
+/// function specifies how to derive it at compression/decompression time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldLength {
+    /// Fixed bit length (the default — same as `fl` value)
+    Fixed(u16),
+    /// fl-token-length: length = TKL_value * 8 bits
+    TokenLength,
+    /// fl-length-bytes: length = referenced_field_value * 8 bits
+    /// The usize is the entry index of the referenced field.
+    LengthBytes(usize),
+    /// fl-length-bits: length = referenced_field_value (in bits)
+    /// The usize is the entry index of the referenced field.
+    LengthBits(usize),
+    /// fl-variable: 4-bit length prefix sent in-band (CoAP option encoding)
+    Variable,
+}
+
 /// Parsed rule value types
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuleValue {
@@ -71,6 +91,10 @@ pub struct Field {
     #[serde(rename = "FL")]
     pub fl: Option<u16>,
 
+    /// Dynamic field length function — takes priority over `fl` when present.
+    #[serde(skip)]
+    pub fl_func: Option<FieldLength>,
+
     /// Direction Indicator (RFC 8724): "up", "down", or "bi" (bidirectional)
     /// None or "bi" means the rule applies in both directions
     #[serde(rename = "DI")]
@@ -126,12 +150,15 @@ impl Field {
             }
         }
 
-        self.parsed_tv = match (&self.mo, &self.tv) {
-            (MatchingOperator::Equal, Some(tv_json)) |
-            (MatchingOperator::Msb(_), Some(tv_json)) => {
+        self.parsed_tv = match (&self.mo, &self.cda, &self.tv) {
+            // For Equal, MSB, and Ignore with NotSent - parse single TV value
+            (MatchingOperator::Equal, _, Some(tv_json)) |
+            (MatchingOperator::Msb(_), _, Some(tv_json)) |
+            (MatchingOperator::Ignore, CompressionAction::NotSent, Some(tv_json)) => {
                 parse_single_value(tv_json, self.fid).map(ParsedTargetValue::Single)
             },
-            (MatchingOperator::MatchMapping, Some(serde_json::Value::Array(arr))) => {
+            // For MatchMapping - parse as array
+            (MatchingOperator::MatchMapping, _, Some(serde_json::Value::Array(arr))) => {
                 let values: Vec<RuleValue> = arr.iter()
                     .filter_map(|json_val| parse_single_value(json_val, self.fid))
                     .collect();
@@ -328,14 +355,18 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
                 if let Ok(val) = s.parse::<u64>() {
                     return Some(RuleValue::U64(val));
                 }
-                // Try hex
+                // Try hex with 0x prefix
                 let clean_s = s.strip_prefix("0x").unwrap_or(s);
                 if let Ok(val) = u64::from_str_radix(clean_s, 16) {
                     Some(RuleValue::U64(val))
+                } else if let Ok(bytes) = hex::decode(s) {
+                    // Try decoding as hex bytes (for 8-byte IID from SOR)
+                    Some(RuleValue::Bytes(bytes))
                 } else {
                     Some(RuleValue::String(s.clone()))
                 }
             } else if fid_str.ends_with("PREFIX") {
+                // First try parsing as IPv6 address with optional /prefix notation
                 let prefix_str = s.split('/').next().unwrap_or(s);
                 let clean_prefix_str = if prefix_str.is_empty() { "::" } else { prefix_str };
 
@@ -349,6 +380,16 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
                     let prefix_bytes_len = prefix_len.div_ceil(8);
                     let prefix_bytes: Vec<u8> = bytes[..prefix_bytes_len].to_vec();
                     Some(RuleValue::Bytes(prefix_bytes))
+                } else if let Ok(bytes) = hex::decode(s) {
+                    // Try decoding as hex string (from SOR format)
+                    Some(RuleValue::Bytes(bytes))
+                } else {
+                    Some(RuleValue::String(s.clone()))
+                }
+            } else if fid_str == "IPV6.SRC" || fid_str == "IPV6.DST" {
+                // Parse full IPv6 addresses
+                if let Ok(addr) = s.parse::<Ipv6Addr>() {
+                    Some(RuleValue::Bytes(addr.octets().to_vec()))
                 } else {
                     Some(RuleValue::String(s.clone()))
                 }

@@ -20,11 +20,18 @@ pub struct BranchKey {
     pub mo_type: u8,  // 0=equal, 1=ignore, 2=match-mapping, 3=MSB
     pub mo_val: Option<u8>,  // For MSB matching
     pub mapping_hash: Option<u64>,  // Hash of mapping values for match-mapping
+    /// Next field type — separates branches when rules diverge at the next field
+    pub next_fid: Option<FieldId>,
 }
 
 impl BranchKey {
     pub fn new(value: Option<Vec<u8>>, direction: Option<crate::parser::Direction>, mo_type: u8, mo_val: Option<u8>, mapping_hash: Option<u64>) -> Self {
-        Self { value, direction, mo_type, mo_val, mapping_hash }
+        Self { value, direction, mo_type, mo_val, mapping_hash, next_fid: None }
+    }
+
+    pub fn with_next_fid(mut self, next_fid: Option<FieldId>) -> Self {
+        self.next_fid = next_fid;
+        self
     }
 }
 
@@ -64,6 +71,8 @@ pub struct TreeNode {
     pub rule_id: Option<u32>,
     pub rule_id_length: Option<u8>,
     pub is_leaf: bool,
+    /// Direction constraint for this subtree (None = both directions)
+    pub direction_filter: Option<crate::parser::Direction>,
 }
 
 impl TreeNode {
@@ -74,6 +83,7 @@ impl TreeNode {
             rule_id: None,
             rule_id_length: None,
             is_leaf: false,
+            direction_filter: None,
         }
     }
 
@@ -84,6 +94,7 @@ impl TreeNode {
             rule_id: Some(rule_id),
             rule_id_length: Some(rule_id_length),
             is_leaf: true,
+            direction_filter: None,
         }
     }
 
@@ -94,6 +105,7 @@ impl TreeNode {
             rule_id: None,
             rule_id_length: None,
             is_leaf: false,
+            direction_filter: None,
         }
     }
 
@@ -138,10 +150,59 @@ pub fn build_tree(rules: &[Rule]) -> TreeNode {
         if rule.compression.is_empty() {
             continue;
         }
-        build_rule_path(&mut root, rule, &rule.compression);
+        // Insert CoAP end-of-options marker if the rule has CoAP option fields
+        let fields_with_marker = insert_coap_marker_if_needed(&rule.compression);
+        let fields_ref = fields_with_marker.as_deref().unwrap_or(&rule.compression);
+        build_rule_path(&mut root, rule, fields_ref);
     }
 
     root
+}
+
+/// Check if a field ID is a CoAP option (vs CoAP header field)
+pub fn is_coap_option_field(fid: FieldId) -> bool {
+    matches!(fid,
+        FieldId::CoapIfMatch | FieldId::CoapUriHost | FieldId::CoapEtag |
+        FieldId::CoapIfNoneMatch | FieldId::CoapObserve | FieldId::CoapUriPort |
+        FieldId::CoapLocationPath | FieldId::CoapUriPath | FieldId::CoapContentFormat |
+        FieldId::CoapMaxAge | FieldId::CoapUriQuery | FieldId::CoapAccept |
+        FieldId::CoapLocationQuery | FieldId::CoapBlock2 | FieldId::CoapBlock1 |
+        FieldId::CoapSize2 | FieldId::CoapProxyUri | FieldId::CoapProxyScheme |
+        FieldId::CoapSize1 | FieldId::CoapNoResponse | FieldId::CoapOption
+    )
+}
+
+/// Insert a virtual CoAP marker field after the last CoAP option in the field list.
+/// Returns None if no CoAP options are present (no modification needed).
+fn insert_coap_marker_if_needed(fields: &[Field]) -> Option<Vec<Field>> {
+    // Find the index of the last CoAP option field
+    let last_option_idx = fields.iter().rposition(|f| is_coap_option_field(f.fid));
+
+    let last_idx = last_option_idx?;
+
+    // Only insert if there isn't already a CoapMarker at last_idx + 1
+    if fields.get(last_idx + 1).map(|f| f.fid) == Some(FieldId::CoapMarker) {
+        return None; // Already has a marker
+    }
+
+    let mut new_fields = Vec::with_capacity(fields.len() + 1);
+    new_fields.extend_from_slice(&fields[..=last_idx]);
+
+    // Insert virtual marker field (0xFF end-of-options)
+    new_fields.push(Field {
+        fid: FieldId::CoapMarker,
+        fl: Some(8),
+        fl_func: None,
+        di: None,
+        tv: Some(serde_json::json!(0xFF)),
+        mo: MatchingOperator::Equal,
+        cda: CompressionAction::NotSent,
+        mo_val: None,
+        parsed_tv: Some(ParsedTargetValue::Single(RuleValue::U64(0xFF))),
+    });
+
+    new_fields.extend_from_slice(&fields[last_idx + 1..]);
+    Some(new_fields)
 }
 
 fn build_rule_path(root: &mut TreeNode, rule: &Rule, fields: &[Field]) {
@@ -151,7 +212,8 @@ fn build_rule_path(root: &mut TreeNode, rule: &Rule, fields: &[Field]) {
 
     let first_field = &fields[0];
     let first_fid = first_field.fid;
-    let branch_key = get_branch_key(first_field);
+    let next_fid = fields.get(1).map(|f| f.fid);
+    let branch_key = get_branch_key(first_field).with_next_fid(next_fid);
     let branch_info = field_to_branch_info(first_field);
 
     let first_node = if let Some(branches) = root.branches.get_mut(&branch_key) {
@@ -191,7 +253,8 @@ fn build_path_recursive(current: &mut TreeNode, rule: &Rule, remaining: &[Field]
 
     let field = &remaining[0];
     let fid = field.fid;
-    let branch_key = get_branch_key(field);
+    let next_fid = remaining.get(1).map(|f| f.fid);
+    let branch_key = get_branch_key(field).with_next_fid(next_fid);
     let branch_info = field_to_branch_info(field);
 
     let next_node = if let Some(branches) = current.branches.get_mut(&branch_key) {

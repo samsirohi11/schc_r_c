@@ -171,7 +171,11 @@ impl<'a> StreamingParser<'a> {
     }
 
     /// Create a new streaming parser with a specified link layer type
-    pub fn with_link_layer(raw: &'a [u8], direction: Direction, link_layer: LinkLayer) -> Result<Self> {
+    pub fn with_link_layer(
+        raw: &'a [u8],
+        direction: Direction,
+        link_layer: LinkLayer,
+    ) -> Result<Self> {
         if raw.is_empty() {
             return Err(SchcError::PacketParse("Empty packet".to_string()));
         }
@@ -250,6 +254,16 @@ impl<'a> StreamingParser<'a> {
         let ip_data = &self.raw[self.ip_start..];
 
         match fid {
+            // Generic IP version (works for both IPv4 and IPv6)
+            FieldId::IpVer => {
+                if self.ip_start < self.raw.len() {
+                    let version = (self.raw[self.ip_start] >> 4) & 0x0F;
+                    Ok(Some(FieldValue::U8(version)))
+                } else {
+                    Ok(None)
+                }
+            }
+
             // IPv4 Fields
             FieldId::Ipv4Ver
             | FieldId::Ipv4Ihl
@@ -381,7 +395,14 @@ impl<'a> StreamingParser<'a> {
             FieldId::Icmpv6Type
             | FieldId::Icmpv6Code
             | FieldId::Icmpv6Checksum
+            | FieldId::Icmpv6Identifier
+            | FieldId::Icmpv6Mtu
+            | FieldId::Icmpv6Pointer
+            | FieldId::Icmpv6Sequence
             | FieldId::Icmpv6Payload => self.extract_icmpv6_field(fid),
+
+            // CoAP payload marker (0xFF) - virtual field representing end of CoAP options
+            FieldId::CoapMarker => self.extract_coap_marker(),
 
             // Unsupported fields (IP.VER, CoAP options, etc.) - generated from JSON but not yet implemented
             _ => Ok(None),
@@ -892,9 +913,9 @@ impl<'a> StreamingParser<'a> {
         }
 
         let first_byte = coap_data[0];
-        let ver = (first_byte >> 6) & 0x03;  // Bits 0-1 (MSB)
+        let ver = (first_byte >> 6) & 0x03; // Bits 0-1 (MSB)
         let msg_type = (first_byte >> 4) & 0x03; // Bits 2-3
-        let tkl = first_byte & 0x0F;         // Bits 4-7 (LSB)
+        let tkl = first_byte & 0x0F; // Bits 4-7 (LSB)
 
         // Cache TKL for token parsing
         self.coap_ctx.tkl = Some(tkl);
@@ -1129,13 +1150,17 @@ impl<'a> StreamingParser<'a> {
             let delta: u16 = match delta_nibble {
                 0..=12 => delta_nibble as u16,
                 13 => {
-                    if pos >= coap_data.len() { break; }
+                    if pos >= coap_data.len() {
+                        break;
+                    }
                     let ext = coap_data[pos] as u16 + 13;
                     pos += 1;
                     ext
                 }
                 14 => {
-                    if pos + 1 >= coap_data.len() { break; }
+                    if pos + 1 >= coap_data.len() {
+                        break;
+                    }
                     let ext = u16::from_be_bytes([coap_data[pos], coap_data[pos + 1]]) + 269;
                     pos += 2;
                     ext
@@ -1148,14 +1173,19 @@ impl<'a> StreamingParser<'a> {
             let length: usize = match length_nibble {
                 0..=12 => length_nibble as usize,
                 13 => {
-                    if pos >= coap_data.len() { break; }
+                    if pos >= coap_data.len() {
+                        break;
+                    }
                     let ext = coap_data[pos] as usize + 13;
                     pos += 1;
                     ext
                 }
                 14 => {
-                    if pos + 1 >= coap_data.len() { break; }
-                    let ext = u16::from_be_bytes([coap_data[pos], coap_data[pos + 1]]) as usize + 269;
+                    if pos + 1 >= coap_data.len() {
+                        break;
+                    }
+                    let ext =
+                        u16::from_be_bytes([coap_data[pos], coap_data[pos + 1]]) as usize + 269;
                     pos += 2;
                     ext
                 }
@@ -1180,6 +1210,48 @@ impl<'a> StreamingParser<'a> {
         // pos now points to the CoAP application payload (after options and 0xFF marker if present)
         self.coap_ctx.payload_start = Some(coap_start + pos);
         Ok(())
+    }
+
+    /// Extract the CoAP payload marker (0xFF)
+    ///
+    /// The 0xFF marker indicates the end of CoAP options and the start of the payload.
+    /// This virtual field is inserted by the tree builder when CoAP options are present
+    /// in a rule, and must be matched to ensure proper packet parsing.
+    fn extract_coap_marker(&mut self) -> Result<Option<FieldValue>> {
+        let coap_start = match self.get_coap_start()? {
+            Some(start) => start,
+            None => return Ok(None), // Not a CoAP packet
+        };
+
+        if coap_start >= self.raw.len() {
+            return Ok(None);
+        }
+
+        // Ensure CoAP options are parsed (this sets payload_start)
+        if self.coap_ctx.payload_start.is_none() {
+            self.parse_coap_options(coap_start)?;
+        }
+
+        // The 0xFF marker is present if we have options and there's payload after them,
+        // OR if options were parsed (payload_start is set)
+        match self.coap_ctx.payload_start {
+            Some(payload_start) => {
+                // Check if there's actually a 0xFF marker at the options boundary
+                // The marker would be at payload_start - 1 if there was one
+                if payload_start > coap_start {
+                    let marker_pos = payload_start - 1;
+                    if marker_pos < self.raw.len() && self.raw[marker_pos] == 0xFF {
+                        Ok(Some(FieldValue::U8(0xFF)))
+                    } else {
+                        // No marker present (options ended without 0xFF)
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
     }
 
     // =========================================================================
@@ -1233,12 +1305,60 @@ impl<'a> StreamingParser<'a> {
             return Ok(None); // ICMPv6 header must be at least 4 bytes
         }
 
+        let icmp_type = icmpv6_data[0];
+
         match fid {
             FieldId::Icmpv6Type => Ok(Some(FieldValue::U8(icmpv6_data[0]))),
             FieldId::Icmpv6Code => Ok(Some(FieldValue::U8(icmpv6_data[1]))),
             FieldId::Icmpv6Checksum => {
                 let checksum = u16::from_be_bytes([icmpv6_data[2], icmpv6_data[3]]);
                 Ok(Some(FieldValue::U16(checksum)))
+            }
+            FieldId::Icmpv6Identifier => {
+                // Identifier is in the message body (bytes 4-5) for Echo Request (128) / Echo Reply (129)
+                if (icmp_type == 128 || icmp_type == 129) && icmpv6_data.len() >= 6 {
+                    let id = u16::from_be_bytes([icmpv6_data[4], icmpv6_data[5]]);
+                    Ok(Some(FieldValue::U16(id)))
+                } else {
+                    Ok(None)
+                }
+            }
+            FieldId::Icmpv6Sequence => {
+                // Sequence is in the message body (bytes 6-7) for Echo Request (128) / Echo Reply (129)
+                if (icmp_type == 128 || icmp_type == 129) && icmpv6_data.len() >= 8 {
+                    let seq = u16::from_be_bytes([icmpv6_data[6], icmpv6_data[7]]);
+                    Ok(Some(FieldValue::U16(seq)))
+                } else {
+                    Ok(None)
+                }
+            }
+            FieldId::Icmpv6Mtu => {
+                // MTU is in the message body (bytes 4-7) for Packet Too Big (2)
+                if icmp_type == 2 && icmpv6_data.len() >= 8 {
+                    let mtu = u32::from_be_bytes([
+                        icmpv6_data[4],
+                        icmpv6_data[5],
+                        icmpv6_data[6],
+                        icmpv6_data[7],
+                    ]);
+                    Ok(Some(FieldValue::U32(mtu)))
+                } else {
+                    Ok(None)
+                }
+            }
+            FieldId::Icmpv6Pointer => {
+                // Pointer is in the message body (bytes 4-7) for Parameter Problem (4)
+                if icmp_type == 4 && icmpv6_data.len() >= 8 {
+                    let ptr = u32::from_be_bytes([
+                        icmpv6_data[4],
+                        icmpv6_data[5],
+                        icmpv6_data[6],
+                        icmpv6_data[7],
+                    ]);
+                    Ok(Some(FieldValue::U32(ptr)))
+                } else {
+                    Ok(None)
+                }
             }
             FieldId::Icmpv6Payload => {
                 if icmpv6_data.len() <= 4 {
@@ -1305,6 +1425,10 @@ pub fn parse_packet_fields(
             FieldId::Icmpv6Type,
             FieldId::Icmpv6Code,
             FieldId::Icmpv6Checksum,
+            FieldId::Icmpv6Identifier,
+            FieldId::Icmpv6Mtu,
+            FieldId::Icmpv6Pointer,
+            FieldId::Icmpv6Sequence,
         ]
     } else if ip_version == 4 {
         vec![
@@ -1480,6 +1604,30 @@ mod tests {
         match version {
             FieldValue::U8(v) => assert_eq!(*v, 4),
             _ => panic!("Expected U8 for IPv4 version"),
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_ip_version() {
+        // Test IP.VER works for both IPv4 and IPv6 packets
+        // IPv4 packet
+        let ipv4_packet = create_ipv4_udp_packet();
+        let mut parser = StreamingParser::new(&ipv4_packet, Direction::Up).unwrap();
+
+        let version = parser.parse_field(FieldId::IpVer).unwrap().unwrap();
+        match version {
+            FieldValue::U8(v) => assert_eq!(*v, 4, "IP.VER should return 4 for IPv4 packets"),
+            _ => panic!("Expected U8 for IP version"),
+        }
+
+        // IPv6 packet
+        let ipv6_packet = create_ipv6_udp_packet();
+        let mut parser = StreamingParser::new(&ipv6_packet, Direction::Up).unwrap();
+
+        let version = parser.parse_field(FieldId::IpVer).unwrap().unwrap();
+        match version {
+            FieldValue::U8(v) => assert_eq!(*v, 6, "IP.VER should return 6 for IPv6 packets"),
+            _ => panic!("Expected U8 for IP version"),
         }
     }
 

@@ -14,6 +14,7 @@
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
 use crate::rule::{Rule, MatchingOperator, CompressionAction};
+use crate::tree::is_coap_option_field;
 
 // Re-export core types from submodules
 pub use crate::parser::{Direction, FieldValue, StreamingParser, LinkLayer, parse_packet_fields, display_packet_fields};
@@ -63,7 +64,7 @@ pub fn compress_packet_with_link_layer(
         println!("\n--- Streaming Tree Traversal ---");
     }
 
-    traverse_and_compress(tree, &mut parser, rules, &mut Vec::new(), &mut matches, debug, 0);
+    traverse_and_compress(tree, &mut parser, rules, &mut Vec::new(), &mut matches, debug, 0, &mut TraversalContext::default());
 
     if matches.is_empty() {
         return Err(SchcError::NoMatchingRule);
@@ -119,6 +120,44 @@ pub fn compress_packet_with_link_layer(
 }
 
 // =============================================================================
+// Traversal Context for CoAP Option Accumulation
+// =============================================================================
+
+/// Context passed through tree traversal for CoAP option tracking
+#[derive(Debug, Clone, Default)]
+struct TraversalContext {
+    /// Running cumulative CoAP option number (sum of deltas)
+    pub coap_option_number: u16,
+}
+
+/// Map a CoAP option FieldId to its absolute option number (RFC 7252)
+fn coap_option_field_number(fid: FieldId) -> Option<u16> {
+    match fid {
+        FieldId::CoapIfMatch => Some(1),
+        FieldId::CoapUriHost => Some(3),
+        FieldId::CoapEtag => Some(4),
+        FieldId::CoapIfNoneMatch => Some(5),
+        FieldId::CoapObserve => Some(6),
+        FieldId::CoapUriPort => Some(7),
+        FieldId::CoapLocationPath => Some(8),
+        FieldId::CoapUriPath => Some(11),
+        FieldId::CoapContentFormat => Some(12),
+        FieldId::CoapMaxAge => Some(14),
+        FieldId::CoapUriQuery => Some(15),
+        FieldId::CoapAccept => Some(17),
+        FieldId::CoapLocationQuery => Some(20),
+        FieldId::CoapBlock2 => Some(23),
+        FieldId::CoapBlock1 => Some(27),
+        FieldId::CoapSize2 => Some(28),
+        FieldId::CoapProxyUri => Some(35),
+        FieldId::CoapProxyScheme => Some(39),
+        FieldId::CoapSize1 => Some(60),
+        FieldId::CoapNoResponse => Some(258),
+        _ => None,
+    }
+}
+
+// =============================================================================
 // Tree Traversal with Integrated Parse + Match + Compress
 // =============================================================================
 
@@ -130,6 +169,7 @@ fn traverse_and_compress(
     matches: &mut Vec<CompressionResult>,
     debug: bool,
     depth: usize,
+    ctx: &mut TraversalContext,
 ) {
     let indent = "  ".repeat(depth);
 
@@ -168,7 +208,7 @@ fn traverse_and_compress(
     for (key, branches) in &node.branches {
         for branch in branches {
             if key.value == Some(END_MARKER.to_vec()) {
-                traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth);
+                traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth, ctx);
                 continue;
             }
 
@@ -180,7 +220,7 @@ fn traverse_and_compress(
                         println!("{}├─ - {} [DI skip]: packet_dir={:?} field_di={:?}",
                                  indent, branch.info.fid, parser.direction(), branch.info.di);
                     }
-                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth);
+                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth, ctx);
                 }
                 BranchMatchResult::Matched(field_value) => {
                     if debug {
@@ -204,10 +244,25 @@ fn traverse_and_compress(
                                  target_str);
                     }
                     if let Some(fv) = field_value {
+                        // Track CoAP option numbers: accumulate delta for option fields
+                        let prev_coap_option = ctx.coap_option_number;
+                        if is_coap_option_field(branch.info.fid) {
+                            // The CoAP option number for known fields is the absolute number.
+                            // Update the running context with the absolute option number.
+                            if let Some(opt_num) = coap_option_field_number(branch.info.fid) {
+                                ctx.coap_option_number = opt_num;
+                            }
+                        }
+
                         path.push((branch.info.fid, fv, branch.info.clone()));
+                        traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1, ctx);
+                        path.pop();
+
+                        // Restore context for backtracking
+                        ctx.coap_option_number = prev_coap_option;
+                    } else {
+                        traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1, ctx);
                     }
-                    traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth + 1);
-                    path.pop();
                 }
                 BranchMatchResult::NotMatched(field_value) => {
                     if debug {

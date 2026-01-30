@@ -97,16 +97,23 @@ pub fn build_headers(
     // Calculate CoAP header length (4 bytes fixed + token length)
     let coap_len = if has_coap {
         let tkl = get_field_u8(fields, FieldId::CoapTkl).unwrap_or(0) as usize;
-        4 + tkl // 4 bytes fixed header + token
+        let has_token = fields.contains_key(&FieldId::CoapToken);
+        4 + if has_token { tkl } else { 0 }
     } else {
         0
     };
 
-    // Transport layer length: UDP (8 bytes) or ICMPv6 (4 bytes fixed header)
+    // Transport layer length: UDP (8 bytes) or ICMPv6 (variable based on type)
     let transport_len = if has_udp {
         8
     } else if has_icmpv6 {
-        4 // ICMPv6 fixed header is 4 bytes (Type + Code + Checksum)
+        let icmp_type = get_field_u8(fields, FieldId::Icmpv6Type).unwrap_or(0);
+        match icmp_type {
+            // Echo, Packet Too Big, Parameter Problem, Dest Unreachable, Time Exceeded: 8 bytes
+            128 | 129 | 1 | 2 | 3 | 4 => 8,
+            // Other types: 4 bytes fixed header only
+            _ => 4,
+        }
     } else {
         0
     };
@@ -141,11 +148,12 @@ pub fn build_headers(
         } else if has_coap {
             let coap_header = build_coap_header(fields)?;
             let mut combined = coap_header;
-            // Add CoAP payload marker (0xFF) if there's a payload (RFC 7252)
-            // The SCHC compressor excludes the 0xFF marker from the payload,
-            // so it must be reconstructed here during decompression.
+            // Add CoAP payload marker (0xFF) if there's a payload AND CoAP options
+            // were reconstructed from decompressed fields (RFC 7252).
+            // When no options are in the rule, the 0xFF marker is already in the payload.
+            let has_coap_options = COAP_OPTION_FIELDS.iter().any(|fid| fields.contains_key(fid));
             if let Some(p) = payload {
-                if !p.is_empty() {
+                if !p.is_empty() && has_coap_options {
                     combined.push(0xFF);
                 }
                 combined.extend_from_slice(p);
@@ -163,30 +171,18 @@ pub fn build_headers(
             &ip_header,
             ip_version,
             Some(&udp_payload),
-        )?;
+)?;
         data.extend_from_slice(&udp_header);
+        data.extend_from_slice(&udp_payload);
     } else if has_icmpv6 {
         // ICMPv6 is directly over IPv6
         let icmpv6_header = build_icmpv6_header(fields, &ip_header, payload)?;
         data.extend_from_slice(&icmpv6_header);
     }
 
-    // Build application layer header if present (either QUIC or CoAP, over UDP)
-    if has_quic {
-        let quic_header = build_quic_header(fields)?;
-        data.extend_from_slice(&quic_header);
-    } else if has_coap {
-        let coap_header = build_coap_header(fields)?;
-        data.extend_from_slice(&coap_header);
-        // Add CoAP payload marker (0xFF) if there's a payload (RFC 7252)
-        // The SCHC compressor excludes the 0xFF marker from the payload,
-        // so it must be reconstructed here during decompression.
-        if let Some(p) = payload {
-            if !p.is_empty() {
-                data.push(0xFF);
-            }
-        }
-    }
+// Note: Application layer (QUIC/CoAP) is already included in the UDP payload above.
+    // The UDP payload calculation properly includes the full CoAP/QUIC header + payload.
+    // We must NOT add it again here to avoid duplication.
 
     Ok(ReconstructedHeaders {
         data,
@@ -874,6 +870,33 @@ fn build_icmpv6_header(
     // Bytes 2-3: Checksum (placeholder, will be computed)
     header.push(0);
     header.push(0);
+
+    // Bytes 4-7: Message body (type-dependent)
+    match icmp_type {
+        // Echo Request (128) / Echo Reply (129): Identifier (16) + Sequence (16)
+        128 | 129 => {
+            let id = get_field_u16(fields, FieldId::Icmpv6Identifier).unwrap_or(0);
+            header.extend_from_slice(&id.to_be_bytes());
+            let seq = get_field_u16(fields, FieldId::Icmpv6Sequence).unwrap_or(0);
+            header.extend_from_slice(&seq.to_be_bytes());
+        }
+        // Packet Too Big (2): MTU (32)
+        2 => {
+            let mtu = get_field_u32(fields, FieldId::Icmpv6Mtu).unwrap_or(1280);
+            header.extend_from_slice(&mtu.to_be_bytes());
+        }
+        // Parameter Problem (4): Pointer (32)
+        4 => {
+            let ptr = get_field_u32(fields, FieldId::Icmpv6Pointer).unwrap_or(0);
+            header.extend_from_slice(&ptr.to_be_bytes());
+        }
+        // Destination Unreachable (1), Time Exceeded (3): 4 bytes of unused/reserved
+        1 | 3 => {
+            header.extend_from_slice(&[0u8; 4]);
+        }
+        // Other types: no message body fields added
+        _ => {}
+    }
 
     // Compute checksum if needed
     let needs_checksum = fields

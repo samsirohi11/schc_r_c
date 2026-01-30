@@ -6,10 +6,11 @@
 use bitvec::prelude::*;
 use std::collections::HashMap;
 
+use crate::bit_buffer::BitBuffer;
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
 use crate::parser::{FieldValue, Direction};
-use crate::rule::{Rule, Field, CompressionAction, ParsedTargetValue, RuleValue};
+use crate::rule::{Rule, Field, FieldLength, CompressionAction, ParsedTargetValue, RuleValue};
 
 // =============================================================================
 // Decompression Result Types
@@ -97,53 +98,46 @@ pub fn decompress_packet(
 ) -> Result<DecompressedPacket> {
     // Match rule ID
     let rule = match_rule_id(compressed_data, rules)?;
-    
-    let bits = BitSlice::<_, Msb0>::from_slice(compressed_data);
-    let mut bit_pos = rule.rule_id_length as usize;
-    
+
+    let mut buf = BitBuffer::from_bytes(compressed_data);
+    buf.set_position(rule.rule_id_length as usize);
+
     // Decompress each field according to its CDA
-    // Pass already-decompressed fields for QUIC CID length lookup
+    // Pass already-decompressed fields for context-dependent length lookup
     // Skip fields that don't match the current direction (DI filtering)
     let mut fields: HashMap<FieldId, FieldValue> = HashMap::new();
 
     for field in &rule.compression {
-        // Check direction indicator - skip fields that don't apply to this direction
-        // field.di = None means bidirectional (applies to both directions)
-        // field.di = Some(Direction::Up) means only for uplink
-        // field.di = Some(Direction::Down) means only for downlink
         let field_applies = match field.di {
-            None => true, // Bidirectional - always applies
+            None => true,
             Some(field_dir) => field_dir == direction,
         };
 
         if !field_applies {
-            // Skip this field for this direction
             continue;
         }
 
-        let value = decompress_field(bits, &mut bit_pos, field, &fields)?;
+        let value = decompress_field(&mut buf, field, &fields, &rule.compression)?;
         fields.insert(field.fid, value);
     }
-    
+
+    let bit_pos = buf.position();
+
     // Extract payload from compressed data
-    // The payload starts at the next byte boundary after the residue bits
     let residue_bytes = bit_pos.div_ceil(8);
     let extracted_payload: &[u8] = if residue_bytes < compressed_data.len() {
         &compressed_data[residue_bytes..]
     } else {
         &[]
     };
-    
-    // Use explicitly provided payload if given, otherwise use extracted payload
+
     let payload = original_payload.unwrap_or(extracted_payload);
-    
-    // Build the reconstructed header (pass payload for length/checksum computation)
+
     let header_data = build_header(&fields, direction, Some(payload))?;
-    
-    // Build full packet (header + payload)
+
     let mut full_data = header_data.clone();
     full_data.extend_from_slice(payload);
-    
+
     Ok(DecompressedPacket {
         header_data,
         full_data,
@@ -161,32 +155,28 @@ pub fn decompress_packet(
 
 /// Decompress a single field based on its CDA
 fn decompress_field(
-    bits: &BitSlice<u8, Msb0>,
-    bit_pos: &mut usize,
+    buf: &mut BitBuffer,
     field: &Field,
     decompressed_fields: &HashMap<FieldId, FieldValue>,
+    rule_entries: &[Field],
 ) -> Result<FieldValue> {
     match field.cda {
         CompressionAction::NotSent => {
-            // Restore from Target Value
             restore_from_tv(field)
         }
         CompressionAction::ValueSent => {
-            // Read full field value from residue
-            // For QUIC CID fields, get length from previously decompressed length field
-            let field_bits = get_field_size_bits_with_context(field, decompressed_fields);
-            read_field_value(bits, bit_pos, field_bits, field.fid)
+            let field_bits = get_field_size_bits_with_context_and_rule(
+                field, decompressed_fields, rule_entries,
+            );
+            read_field_value(buf, field_bits, field.fid)
         }
         CompressionAction::MappingSent => {
-            // Read index and lookup in TV array
-            decompress_mapping(bits, bit_pos, field)
+            decompress_mapping(buf, field)
         }
         CompressionAction::Lsb => {
-            // Combine MSB from TV with LSB from residue
-            decompress_lsb(bits, bit_pos, field)
+            decompress_lsb(buf, field)
         }
         CompressionAction::Compute => {
-            // Placeholder - will be computed during header reconstruction
             Ok(FieldValue::ComputePlaceholder)
         }
     }
@@ -211,8 +201,7 @@ fn restore_from_tv(field: &Field) -> Result<FieldValue> {
 
 /// Decompress mapping-sent field (read index, lookup TV)
 fn decompress_mapping(
-    bits: &BitSlice<u8, Msb0>,
-    bit_pos: &mut usize,
+    buf: &mut BitBuffer,
     field: &Field,
 ) -> Result<FieldValue> {
     if let Some(ParsedTargetValue::Mapping(tv_list)) = &field.parsed_tv {
@@ -222,28 +211,29 @@ fn decompress_mapping(
                 "Field {} has empty mapping", field.fid
             )));
         }
-        
-        // Calculate bits needed for index
+
         let index_bits = if num_items <= 1 {
             0
         } else {
             (usize::BITS - (num_items - 1).leading_zeros()) as usize
         };
-        
-        // Read index
+
         let index = if index_bits > 0 {
-            read_bits_as_u64(bits, bit_pos, index_bits)? as usize
+            buf.read_bits(index_bits)
+                .ok_or_else(|| SchcError::Decompression(format!(
+                    "Field {} not enough bits for mapping index", field.fid
+                )))? as usize
         } else {
             0
         };
-        
+
         if index >= tv_list.len() {
             return Err(SchcError::Decompression(format!(
                 "Field {} mapping index {} out of bounds (max: {})",
                 field.fid, index, tv_list.len() - 1
             )));
         }
-        
+
         rule_value_to_field_value(&tv_list[index], field.fid)
     } else {
         Err(SchcError::Decompression(format!(
@@ -254,23 +244,21 @@ fn decompress_mapping(
 
 /// Decompress LSB field (combine MSB from TV + LSB from residue)
 fn decompress_lsb(
-    bits: &BitSlice<u8, Msb0>,
-    bit_pos: &mut usize,
+    buf: &mut BitBuffer,
     field: &Field,
 ) -> Result<FieldValue> {
     let msb_bits = field.mo_val.unwrap_or(0) as usize;
     let field_size = get_field_size_bits(field) as usize;
-    
+
     if msb_bits > field_size {
         return Err(SchcError::Decompression(format!(
             "Field {} MSB bits ({}) exceeds field size ({})",
             field.fid, msb_bits, field_size
         )));
     }
-    
+
     let lsb_bits = field_size - msb_bits;
-    
-    // Get MSB portion from TV
+
     let msb_value = match &field.parsed_tv {
         Some(ParsedTargetValue::Single(rv)) => {
             match rv {
@@ -284,16 +272,15 @@ fn decompress_lsb(
             "Field {} has LSB CDA but no TV", field.fid
         ))),
     };
-    
-    // Read LSB portion from residue
-    let lsb_value = read_bits_as_u64(bits, bit_pos, lsb_bits)?;
-    
-    // Combine: MSB stays in upper bits, LSB fills lower bits
-    // The TV should have the MSB portion already shifted to the correct position
+
+    let lsb_value = buf.read_bits(lsb_bits)
+        .ok_or_else(|| SchcError::Decompression(format!(
+            "Field {} not enough bits for LSB", field.fid
+        )))?;
+
     let msb_mask = ((1u64 << msb_bits) - 1) << lsb_bits;
     let combined = (msb_value & msb_mask) | lsb_value;
-    
-    // Return appropriate FieldValue type based on field size
+
     Ok(match field_size {
         1..=8 => FieldValue::U8(combined as u8),
         9..=16 => FieldValue::U16(combined as u16),
@@ -306,71 +293,31 @@ fn decompress_lsb(
 // Bit Reading Helpers
 // =============================================================================
 
-/// Read n bits from the BitSlice and return as u64
-fn read_bits_as_u64(
-    bits: &BitSlice<u8, Msb0>,
-    bit_pos: &mut usize,
-    n_bits: usize,
-) -> Result<u64> {
-    if *bit_pos + n_bits > bits.len() {
-        return Err(SchcError::Decompression(format!(
-            "Not enough bits: need {} at position {}, have {}",
-            n_bits, *bit_pos, bits.len()
-        )));
-    }
-    
-    let mut value: u64 = 0;
-    for i in 0..n_bits {
-        if bits[*bit_pos + i] {
-            value |= 1 << (n_bits - 1 - i);
-        }
-    }
-    *bit_pos += n_bits;
-    
-    Ok(value)
-}
-
-/// Read field value from bits based on field ID type
+/// Read field value from BitBuffer based on field ID type
 fn read_field_value(
-    bits: &BitSlice<u8, Msb0>,
-    bit_pos: &mut usize,
+    buf: &mut BitBuffer,
     n_bits: u16,
     fid: FieldId,
 ) -> Result<FieldValue> {
     let n = n_bits as usize;
-    
+
     // Check if this is an address/bytes field that needs bytes
-    let is_bytes_field = matches!(fid, 
+    let is_bytes_field = matches!(fid,
         FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App |
         FieldId::Ipv6Src | FieldId::Ipv6Dst |
         FieldId::Ipv6SrcPrefix | FieldId::Ipv6DstPrefix |
         FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix |
         FieldId::Ipv6SrcIid | FieldId::Ipv6DstIid |
         FieldId::Ipv6DevIid | FieldId::Ipv6AppIid |
-        // QUIC connection IDs are variable-length bytes
         FieldId::QuicDcid | FieldId::QuicScid |
-        // CoAP Token is variable-length bytes (0-8 bytes based on TKL)
         FieldId::CoapToken |
-        // ICMPv6 Payload is variable-length bytes
         FieldId::Icmpv6Payload
     );
-    
+
     if is_bytes_field || n > 64 {
-        // Read as bytes
-        let byte_len = n.div_ceil(8);
-        let mut bytes = vec![0u8; byte_len];
-        
-        for i in 0..n {
-            if *bit_pos + i >= bits.len() {
-                return Err(SchcError::Decompression("Not enough bits for address".to_string()));
-            }
-            if bits[*bit_pos + i] {
-                bytes[i / 8] |= 1 << (7 - (i % 8));
-            }
-        }
-        *bit_pos += n;
-        
-        // Convert to appropriate type
+        let bytes = buf.read_bits_as_bytes(n)
+            .ok_or_else(|| SchcError::Decompression("Not enough bits for field".to_string()))?;
+
         match fid {
             FieldId::Ipv4Src | FieldId::Ipv4Dst | FieldId::Ipv4Dev | FieldId::Ipv4App if bytes.len() == 4 => {
                 Ok(FieldValue::Ipv4(std::net::Ipv4Addr::new(
@@ -385,9 +332,12 @@ fn read_field_value(
             _ => Ok(FieldValue::Bytes(bytes)),
         }
     } else {
-        // Read as numeric value
-        let value = read_bits_as_u64(bits, bit_pos, n)?;
-        
+        let value = buf.read_bits(n)
+            .ok_or_else(|| SchcError::Decompression(format!(
+                "Not enough bits: need {} at position {}, have {}",
+                n, buf.position(), buf.remaining() + buf.position()
+            )))?;
+
         Ok(match n {
             1..=8 => FieldValue::U8(value as u8),
             9..=16 => FieldValue::U16(value as u16),
@@ -410,41 +360,135 @@ fn get_field_size_bits(field: &Field) -> u16 {
     field.fid.default_size_bits().unwrap_or(8)
 }
 
-/// Get field size in bits, using previously decompressed fields for QUIC CID length lookup
+/// Get field size in bits, using previously decompressed fields for context-dependent length
 fn get_field_size_bits_with_context(
     field: &Field,
     decompressed_fields: &HashMap<FieldId, FieldValue>,
 ) -> u16 {
-    // Priority: 1. Explicit FL in rule
+    // Priority: 1. fl_func (dynamic length function)
+    if let Some(ref fl_func) = field.fl_func {
+        if let Some(bits) = resolve_field_length(fl_func, decompressed_fields) {
+            return bits;
+        }
+    }
+
+    // 2. Explicit FL in rule
     if let Some(fl) = field.fl {
         return fl;
     }
-    
-    // 2. For QUIC connection ID fields, look up length from previously decompressed length field
+
+    // 3. Hardcoded context lookups (fallback for rules without fl_func)
     match field.fid {
         FieldId::QuicDcid => {
-            // DCID length is in bytes, convert to bits
             if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::QuicDcidLen) {
                 return (*len as u16) * 8;
             }
         }
         FieldId::QuicScid => {
-            // SCID length is in bytes, convert to bits
             if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::QuicScidLen) {
                 return (*len as u16) * 8;
             }
         }
         FieldId::CoapToken => {
-            // CoAP Token length is in bytes (from TKL field), convert to bits
             if let Some(FieldValue::U8(len)) = decompressed_fields.get(&FieldId::CoapTkl) {
                 return (*len as u16) * 8;
             }
         }
         _ => {}
     }
-    
-    // 3. FieldId default from JSON
+
+    // 4. FieldId default from JSON
     field.fid.default_size_bits().unwrap_or(8)
+}
+
+/// Resolve a FieldLength function to a concrete bit length using decompressed field context
+/// Note: LengthBytes/LengthBits require the rule's entry list for index resolution;
+/// use resolve_field_length_with_rule when the rule is available.
+fn resolve_field_length(
+    fl_func: &FieldLength,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
+) -> Option<u16> {
+    match fl_func {
+        FieldLength::Fixed(bits) => Some(*bits),
+        FieldLength::TokenLength => {
+            if let Some(FieldValue::U8(tkl)) = decompressed_fields.get(&FieldId::CoapTkl) {
+                Some((*tkl as u16) * 8)
+            } else {
+                None
+            }
+        }
+        // LengthBytes/LengthBits need rule context — return None to fall through
+        FieldLength::LengthBytes(_) | FieldLength::LengthBits(_) => None,
+        FieldLength::Variable => None,
+    }
+}
+
+/// Resolve a field length from a previously decompressed field by entry index
+/// multiplier: 8 for bytes→bits, 1 for bits→bits
+fn resolve_length_by_index_with_rule(
+    entry_idx: usize,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
+    multiplier: u16,
+    rule_entries: &[Field],
+) -> Option<u16> {
+    // Map entry index → FieldId from rule's compression list
+    let ref_field = rule_entries.get(entry_idx)?;
+    let ref_value = decompressed_fields.get(&ref_field.fid)?;
+    let len = field_value_as_u16(ref_value)?;
+    Some(len * multiplier)
+}
+
+/// Extract a u16 value from a FieldValue (for length resolution)
+fn field_value_as_u16(value: &FieldValue) -> Option<u16> {
+    match value {
+        FieldValue::U8(v) => Some(*v as u16),
+        FieldValue::U16(v) => Some(*v),
+        FieldValue::U32(v) => Some(*v as u16),
+        FieldValue::U64(v) => Some(*v as u16),
+        _ => None,
+    }
+}
+
+/// Get field size with full rule context for entry-index-based FieldLength resolution
+fn get_field_size_bits_with_context_and_rule(
+    field: &Field,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
+    rule_entries: &[Field],
+) -> u16 {
+    // Priority: 1. fl_func (dynamic length function)
+    if let Some(ref fl_func) = field.fl_func {
+        if let Some(bits) = resolve_field_length_with_rule(fl_func, decompressed_fields, rule_entries) {
+            return bits;
+        }
+    }
+
+    // Fall through to existing context resolution
+    get_field_size_bits_with_context(field, decompressed_fields)
+}
+
+/// Resolve a FieldLength function with full rule context
+fn resolve_field_length_with_rule(
+    fl_func: &FieldLength,
+    decompressed_fields: &HashMap<FieldId, FieldValue>,
+    rule_entries: &[Field],
+) -> Option<u16> {
+    match fl_func {
+        FieldLength::Fixed(bits) => Some(*bits),
+        FieldLength::TokenLength => {
+            if let Some(FieldValue::U8(tkl)) = decompressed_fields.get(&FieldId::CoapTkl) {
+                Some((*tkl as u16) * 8)
+            } else {
+                None
+            }
+        }
+        FieldLength::LengthBytes(entry_idx) => {
+            resolve_length_by_index_with_rule(*entry_idx, decompressed_fields, 8, rule_entries)
+        }
+        FieldLength::LengthBits(entry_idx) => {
+            resolve_length_by_index_with_rule(*entry_idx, decompressed_fields, 1, rule_entries)
+        }
+        FieldLength::Variable => None,
+    }
 }
 
 /// Convert RuleValue to FieldValue
@@ -524,6 +568,7 @@ mod tests {
             cda,
             mo_val: None,
             parsed_tv: None,
+            fl_func: None,
         };
         let _ = f.parse_tv();
         f
@@ -585,25 +630,23 @@ mod tests {
     }
 
     // =========================================================================
-    // Bit Reading Tests
+    // Bit Reading Tests (using BitBuffer)
     // =========================================================================
 
     #[test]
-    fn test_read_bits_as_u64() {
+    fn test_read_bits_via_bitbuffer() {
         let data = vec![0b10110100, 0b11001010];
-        let bits = BitSlice::<_, Msb0>::from_slice(&data);
-        
-        let mut pos = 0;
-        
+        let mut buf = BitBuffer::from_bytes(&data);
+
         // Read 4 bits: 1011
-        let val = read_bits_as_u64(bits, &mut pos, 4).unwrap();
+        let val = buf.read_bits(4).unwrap();
         assert_eq!(val, 0b1011);
-        assert_eq!(pos, 4);
-        
+        assert_eq!(buf.position(), 4);
+
         // Read 8 bits: 01001100
-        let val = read_bits_as_u64(bits, &mut pos, 8).unwrap();
+        let val = buf.read_bits(8).unwrap();
         assert_eq!(val, 0b01001100);
-        assert_eq!(pos, 12);
+        assert_eq!(buf.position(), 12);
     }
 
     // =========================================================================
@@ -628,10 +671,9 @@ mod tests {
     #[test]
     fn test_decompress_value_sent() {
         let data = vec![0x1F, 0x90]; // 8080 in big-endian
-        let bits = BitSlice::<_, Msb0>::from_slice(&data);
-        let mut pos = 0;
+        let mut buf = BitBuffer::from_bytes(&data);
 
-        let result = read_field_value(bits, &mut pos, 16, FieldId::UdpSrcPort).unwrap();
+        let result = read_field_value(&mut buf, 16, FieldId::UdpSrcPort).unwrap();
         match result {
             FieldValue::U16(v) => assert_eq!(v, 0x1F90), // 8080
             _ => panic!("Expected U16"),
@@ -649,19 +691,19 @@ mod tests {
             cda: CompressionAction::MappingSent,
             mo_val: None,
             parsed_tv: None,
+            fl_func: None,
         };
         let _ = field.parse_tv();
 
         // Index 1 (binary: 01) -> should get 128
         let data = vec![0b01000000];
-        let bits = BitSlice::<_, Msb0>::from_slice(&data);
-        let mut pos = 0;
+        let mut buf = BitBuffer::from_bytes(&data);
 
-        let result = decompress_mapping(bits, &mut pos, &field).unwrap();
+        let result = decompress_mapping(&mut buf, &field).unwrap();
         match result {
             FieldValue::U8(v) => assert_eq!(v, 128),
             _ => panic!("Expected U8"),
         }
-        assert_eq!(pos, 2); // 2 bits consumed for index into 3-element array
+        assert_eq!(buf.position(), 2); // 2 bits consumed for index into 3-element array
     }
 }

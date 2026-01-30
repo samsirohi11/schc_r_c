@@ -85,7 +85,7 @@
     "IP.VER": {
       "length": 4,
       "unit": "bits",
-      "description": "IPv6 or IPv4 Version field"
+      "description": "Generic IP Version field - works with both IPv4 and IPv6 packets. Use this for rules that need to match IP version without knowing the specific protocol in advance. Returns 4 for IPv4, 6 for IPv6."
     },
     "IPV6.TC": {
       "length": 8,
@@ -179,10 +179,30 @@
       "description": "ICMPv6 Checksum field",
       "compute": "ICMPv6-checksum"
     },
+    "ICMPV6.IDENTIFIER": {
+      "length": 16,
+      "unit": "bits",
+      "description": "ICMPv6 Identifier field (Echo Request/Reply)"
+    },
+    "ICMPV6.MTU": {
+      "length": 32,
+      "unit": "bits",
+      "description": "ICMPv6 MTU field (Packet Too Big)"
+    },
     "ICMPV6.PAYLOAD": {
       "length": 0,
       "unit": "bits",
       "description": "ICMPv6 Payload (variable length)"
+    },
+    "ICMPV6.POINTER": {
+      "length": 32,
+      "unit": "bits",
+      "description": "ICMPv6 Pointer field (Parameter Problem)"
+    },
+    "ICMPV6.SEQUENCE": {
+      "length": 16,
+      "unit": "bits",
+      "description": "ICMPv6 Sequence Number field (Echo Request/Reply)"
     },
     "UDP.SRC_PORT": {
       "length": 16,
@@ -249,27 +269,27 @@
     "COAP.option": {
       "length": 0,
       "unit": "bits",
-      "description": "CoAP Option (variable length, TLV format)"
+      "description": "[STRUCTURAL] CoAP Option container field - not for rule matching. Use specific option fields like COAP.URI_PATH instead."
     },
     "COAP.O-DELTA": {
       "length": 4,
       "unit": "bits",
-      "description": "CoAP Option Delta (option number relative encoding)"
+      "description": "[STRUCTURAL] CoAP Option Delta encoding field - internal use only, not for rule matching."
     },
     "COAP.O-LENGTH": {
       "length": 4,
       "unit": "bits",
-      "description": "CoAP Option Length field"
+      "description": "[STRUCTURAL] CoAP Option Length field - internal use only, not for rule matching."
     },
     "COAP.O-VALUE": {
       "length": 0,
       "unit": "bits",
-      "description": "CoAP Option Value (variable length)"
+      "description": "[STRUCTURAL] CoAP Option Value container - not for rule matching. Use specific option fields instead."
     },
     "COAP.marker": {
       "length": 8,
       "unit": "bits",
-      "description": "CoAP End-of-Options Marker (0xFF)"
+      "description": "[VIRTUAL] CoAP End-of-Options Marker (0xFF) - virtual field for rule matching only. The actual marker byte is part of the packet structure, not parsed as a separate field."
     },
     "COAP.URI_PATH": {
       "length": 0,
