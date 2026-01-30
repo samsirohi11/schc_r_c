@@ -253,10 +253,10 @@ pub fn get_field_size_bits_with_context(
     rule_entries: &[Field],
 ) -> u16 {
     // Priority: 1. fl_func with context resolution
-    if let Some(ref fl_func) = field.fl_func {
-        if let Some(bits) = resolve_compressor_field_length(fl_func, field_values, rule_entries) {
-            return bits;
-        }
+    if let Some(ref fl_func) = field.fl_func
+        && let Some(bits) = resolve_compressor_field_length(fl_func, field_values, rule_entries)
+    {
+        return bits;
     }
     // Fall through to static resolution
     get_field_size_bits(field, value)

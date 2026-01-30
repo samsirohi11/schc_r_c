@@ -146,11 +146,10 @@ pub fn build_headers(
             // were reconstructed from decompressed fields (RFC 7252).
             // When no options are in the rule, the 0xFF marker is already in the payload.
             let has_coap_options = COAP_OPTION_FIELDS.iter().any(|fid| fields.contains_key(fid));
-            if let Some(p) = payload {
-                if !p.is_empty() && has_coap_options {
+            if let Some(p) = payload
+                && !p.is_empty() && has_coap_options {
                     coap_header.push(0xFF);
                 }
-            }
             coap_header
         } else {
             Vec::new()
@@ -714,7 +713,7 @@ fn encode_coap_option(option_num: u16, prev_option_num: u16, value: &[u8]) -> Ve
     encoded.push((delta_nibble << 4) | length_nibble);
 
     // Extended delta
-    if delta >= 13 && delta < 269 {
+    if (13..269).contains(&delta) {
         encoded.push((delta - 13) as u8);
     } else if delta >= 269 {
         let ext = delta - 269;
@@ -723,7 +722,7 @@ fn encode_coap_option(option_num: u16, prev_option_num: u16, value: &[u8]) -> Ve
     }
 
     // Extended length
-    if length >= 13 && length < 269 {
+    if (13..269).contains(&length) {
         encoded.push((length - 13) as u8);
     } else if length >= 269 {
         let ext = length - 269;
@@ -825,12 +824,11 @@ fn build_coap_header(fields: &HashMap<FieldId, FieldValue>) -> Result<Vec<u8>> {
     // Collect options that have values in the fields hashmap
     let mut options: Vec<(u16, Vec<u8>)> = Vec::new();
     for &fid in COAP_OPTION_FIELDS {
-        if let Some(value) = fields.get(&fid) {
-            if let Some(opt_num) = coap_option_number(fid) {
+        if let Some(value) = fields.get(&fid)
+            && let Some(opt_num) = coap_option_number(fid) {
                 let bytes = field_value_to_coap_bytes(value);
                 options.push((opt_num, bytes));
             }
-        }
     }
 
     // Sort options by option number (required for delta encoding)

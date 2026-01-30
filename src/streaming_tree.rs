@@ -161,6 +161,7 @@ fn coap_option_field_number(fid: FieldId) -> Option<u16> {
 // Tree Traversal with Integrated Parse + Match + Compress
 // =============================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn traverse_and_compress(
     node: &TreeNode,
     parser: &mut StreamingParser,
@@ -217,8 +218,13 @@ fn traverse_and_compress(
                     // Direction Indicator doesn't match - skip this field entirely
                     // Continue to children without parsing/advancing (DI-specific field doesn't apply)
                     if debug {
-                        println!("{}├─ - {} [DI skip]: packet_dir={:?} field_di={:?}",
-                                 indent, branch.info.fid, parser.direction(), branch.info.di);
+                        let dir_symbol = match branch.info.di {
+                            Some(Direction::Up) => "↑",
+                            Some(Direction::Down) => "↓",
+                            None => "↔",
+                        };
+                        println!("{}├─ - {} {} [DI skip]: packet_dir={:?} field_di={:?}",
+                                 indent, dir_symbol, branch.info.fid, parser.direction(), branch.info.di);
                     }
                     traverse_and_compress(&branch.node, parser, rules, path, matches, debug, depth, ctx);
                 }
@@ -238,8 +244,13 @@ fn traverse_and_compress(
                         } else {
                             branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
                         };
-                        println!("{}├─ ✓ {} [{}]: packet={} target={}",
-                                 indent, branch.info.fid, mo_str,
+                        let dir_symbol = match branch.info.di {
+                            Some(Direction::Up) => "↑",
+                            Some(Direction::Down) => "↓",
+                            None => "↔",
+                        };
+                        println!("{}├─ ✓ {} {} [{}]: packet={} target={}",
+                                 indent, dir_symbol, branch.info.fid, mo_str,
                                  field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
                                  target_str);
                     }
@@ -289,8 +300,13 @@ fn traverse_and_compress(
                                 .collect::<Vec<_>>()
                                 .join(", "))
                         };
-                        println!("{}├─ ✗ {} [{}]: packet={} target={}{}",
-                                 indent, branch.info.fid, mo_str,
+                        let dir_symbol = match branch.info.di {
+                            Some(Direction::Up) => "↑",
+                            Some(Direction::Down) => "↓",
+                            None => "↔",
+                        };
+                        println!("{}├─ ✗ {} {} [{}]: packet={} target={}{}",
+                                 indent, dir_symbol, branch.info.fid, mo_str,
                                  field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
                                  target_str, rule_str);
                     }

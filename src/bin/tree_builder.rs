@@ -33,7 +33,7 @@ fn main() -> Result<()> {
             println!("Filter: Down (App→Device) traffic only\n");
             Some(Direction::Down)
         }
-        "all" | _ => {
+        _ => {
             println!("Filter: All directions\n");
             None
         }

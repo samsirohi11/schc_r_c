@@ -5,7 +5,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pcap_file::pcapng::{Block, PcapNgReader};
-use schc::{Direction, RuleSet, build_tree, compress_packet, decompress_packet, display_tree};
+use schc::{
+    build_tree, compress_packet, decompress_packet, display_tree,
+    Direction, RuleSet,
+};
 use std::fs::File;
 
 #[derive(Parser, Debug)]
@@ -50,6 +53,10 @@ fn main() -> Result<()> {
     let tree = build_tree(&ruleset.rules);
 
     if args.debug {
+        println!("\nNote: Direction filtering is applied during packet matching.");
+        println!(
+            "Fields marked with ↑ apply to UP traffic only, ↓ to DOWN traffic only, ↔ to both."
+        );
         display_tree(&tree);
     }
 

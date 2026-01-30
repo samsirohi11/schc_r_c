@@ -374,10 +374,10 @@ fn get_field_size_bits_with_context(
     decompressed_fields: &HashMap<FieldId, FieldValue>,
 ) -> u16 {
     // Priority: 1. fl_func (dynamic length function)
-    if let Some(ref fl_func) = field.fl_func {
-        if let Some(bits) = resolve_field_length(fl_func, decompressed_fields) {
-            return bits;
-        }
+    if let Some(ref fl_func) = field.fl_func
+        && let Some(bits) = resolve_field_length(fl_func, decompressed_fields)
+    {
+        return bits;
     }
 
     // 2. Explicit FL in rule
@@ -464,12 +464,11 @@ fn get_field_size_bits_with_context_and_rule(
     rule_entries: &[Field],
 ) -> u16 {
     // Priority: 1. fl_func (dynamic length function)
-    if let Some(ref fl_func) = field.fl_func {
-        if let Some(bits) =
+    if let Some(ref fl_func) = field.fl_func
+        && let Some(bits) =
             resolve_field_length_with_rule(fl_func, decompressed_fields, rule_entries)
-        {
-            return bits;
-        }
+    {
+        return bits;
     }
 
     // Fall through to existing context resolution
