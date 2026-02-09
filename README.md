@@ -1,33 +1,63 @@
-# SCHC-Rust 🦀
+# schc
 
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A Rust implementation of **Static Context Header Compression (SCHC)**, featuring a streaming tree-based architecture for efficient packet compression and decompression.
+A Rust implementation of **Static Context Header Compression (SCHC)** per [RFC 8724](https://www.rfc-editor.org/rfc/rfc8724), featuring a streaming tree-based architecture for efficient packet compression and decompression on constrained links.
+
+## Quick Start
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+schc = { git = "https://github.com/samsirohi11/schc_r_c.git" }
+```
+
+Compress an IPv6/UDP packet:
+
+```rust
+use schc::{RuleSet, Direction, compress_packet, build_tree};
+
+// Load rules from JSON
+let rules: RuleSet = serde_json::from_str(rules_json)?;
+
+// Build the matching tree once
+let tree = build_tree(&rules);
+
+// Compress a packet (assumes Ethernet framing)
+let result = compress_packet(&rules, &tree, raw_packet, Direction::Up)?;
+println!("Rule {}/{}: {} -> {} bits",
+    result.rule_id, result.rule_id_length,
+    raw_packet.len() * 8, result.total_bits());
+
+// Decompress back
+let decompressed = schc::decompress_packet(&rules, &result.to_bytes())?;
+let headers = schc::build_headers(&decompressed)?;
+```
 
 ## Overview
 
-SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) and constrained links. This implementation provides:
+SCHC is a header compression mechanism designed for Low-Power Wide-Area Networks (LPWANs) and constrained links. This implementation provides:
 
-- **Bidirectional Support** - Compression and decompression with direction-aware rules
-- **Streaming Parse-Match-Compress Pipeline** - Fields are parsed on-demand during tree traversal, enabling early pruning when mismatches are detected
-- **Hierarchical Rule Tree** - Rules are organized in a tree structure for efficient O(log n) matching
-- **Header Reconstruction** - Decompression rebuilds complete protocol headers with checksums
+- **Streaming Parse-Match-Compress Pipeline** -- fields are parsed on-demand during tree traversal, enabling early pruning when mismatches are detected
+- **SID-Driven Protocol Detection** -- protocol layers (UDP, QUIC, CoAP, ICMPv6) are determined by the `FieldId` requested, not by inspecting next-header values or well-known ports
+- **Hierarchical Rule Tree** -- rules are organized in a tree structure for efficient O(log n) matching
+- **Bidirectional Support** -- direction-aware fields (`DEV_*`/`APP_*`) resolve to source/destination based on packet direction
+- **Header Reconstruction** -- decompression rebuilds complete protocol headers with computed checksums and lengths
 
-## Features
-
-### Supported Protocols
+## Supported Protocols
 
 | Protocol   | Fields                                                                                                                 |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **IPv4**   | Version, IHL, DSCP, ECN, Length, ID, Flags, Fragment Offset, TTL, Protocol, Checksum, Source, Destination              |
 | **IPv6**   | Version, Traffic Class, Flow Label, Payload Length, Next Header, Hop Limit, Source/Destination (with Prefix/IID split) |
 | **UDP**    | Source Port, Destination Port, Length, Checksum                                                                        |
-| **CoAP**   | Version, Type, Token Length, Code, Message ID, Token                                                                   |
-| **ICMPv6** | Type, Code, Checksum                                                                                                   |
+| **CoAP**   | Version, Type, TKL, Code, Message ID, Token, Options (Uri-Path, Content-Format, etc.), Payload Marker                 |
+| **ICMPv6** | Type, Code, Checksum, Identifier, Sequence, MTU, Pointer, Payload                                                     |
 | **QUIC**   | First Byte, Version, DCID Length, DCID, SCID Length, SCID                                                              |
 
-### Matching Operators (MO)
+## Matching Operators (MO)
 
 | Operator        | Description                        |
 | --------------- | ---------------------------------- |
@@ -36,7 +66,7 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 | `match-mapping` | Value matches one from a list      |
 | `MSB(n)`        | Most Significant n Bits match      |
 
-### Compression/Decompression Actions (CDA)
+## Compression/Decompression Actions (CDA)
 
 | Action         | Description                                              |
 | -------------- | -------------------------------------------------------- |
@@ -46,49 +76,7 @@ SCHC (RFC 8724) is a header compression mechanism designed for Low-Power Wide-Ar
 | `LSB`          | Only Least Significant Bits transmitted                  |
 | `compute`      | Field computed at decompression (e.g., length, checksum) |
 
-### Directional Field Support
-
-Supports direction-aware field identifiers for bidirectional communication:
-
-- `IPV6.DEV_PREFIX` / `IPV6.APP_PREFIX` - Device and Application prefixes
-- `IPV6.DEV_IID` / `IPV6.APP_IID` - Interface Identifiers
-- `UDP.DEV_PORT` / `UDP.APP_PORT` - Ports mapped by direction
-
-### Direction Indicator (DI) per Field
-
-Per RFC 8724, individual fields can specify a Direction Indicator to control when rules apply:
-
-| DI Value | Description                                     |
-| -------- | ----------------------------------------------- |
-| `"up"`   | Field rule applies to uplink only (DEV → APP)   |
-| `"down"` | Field rule applies to downlink only (APP → DEV) |
-| `"bi"`   | Field rule applies bidirectionally (default)    |
-
-Example with DI:
-
-```json
-{
-  "FID": "UDP.SRC_PORT",
-  "DI": "up",
-  "TV": 5683,
-  "MO": "equal",
-  "CDA": "not-sent"
-}
-```
-
-### Link Layer Configuration
-
-The parser supports configurable link layer handling for different packet sources:
-
-| Link Layer  | Description                                |
-| ----------- | ------------------------------------------ |
-| `None`      | Raw IP packets (no link layer header)      |
-| `Ethernet`  | Standard 14-byte Ethernet header (default) |
-| `Custom(n)` | Custom link layer with n-byte header       |
-
-Use `compress_packet_with_link_layer()` for non-Ethernet packets.
-
-### MO/CDA Validation
+## MO/CDA Validation
 
 Rules are validated per RFC 8724 Section 7.3 at load time:
 
@@ -101,238 +89,120 @@ Rules are validated per RFC 8724 Section 7.3 at load time:
 
 Invalid combinations are rejected with descriptive error messages.
 
-## Installation
+## Directional Field Support
 
-### From Source
+Direction-aware field identifiers for bidirectional communication:
 
-```bash
-git clone https://github.com/samsirohi11/schc_r_c.git
-cd schc_r_c
-cargo build --release
-```
+- `IPV6.DEV_PREFIX` / `IPV6.APP_PREFIX` -- Device and Application prefixes
+- `IPV6.DEV_IID` / `IPV6.APP_IID` -- Interface Identifiers
+- `UDP.DEV_PORT` / `UDP.APP_PORT` -- Ports mapped by direction
 
-### As a Library
+Per RFC 8724, individual fields can specify a Direction Indicator (`"up"`, `"down"`, `"bi"`) to control when rules apply.
 
-Add to your `Cargo.toml`:
+## Link Layer Configuration
 
-```toml
-[dependencies]
-schc = { git = "https://github.com/samsirohi11/schc_r_c.git" }
-```
+The parser supports configurable link layer handling:
 
-## Usage
+| Link Layer  | Description                                |
+| ----------- | ------------------------------------------ |
+| `None`      | Raw IP packets (no link layer header)      |
+| `Ethernet`  | Standard 14-byte Ethernet header (default) |
+| `Custom(n)` | Custom link layer with n-byte header       |
 
-### Command Line Tools
+Use `compress_packet_with_link_layer()` for non-Ethernet packets.
 
-#### Compress Packets from PCAP
+## SID-Driven Protocol Detection
 
-```bash
-cargo run --release --bin compressor -- \
-    --rules test-rule.json \
-    --pcap coap-observe.pcapng \
-    --debug
-```
+Each `FieldId` variant maps 1:1 to a SID from YANG/CORECONF. The `FieldId::protocol()` method returns the protocol family a field belongs to (`Ipv4`, `Ipv6`, `Udp`, `Coap`, `Quic`, `Icmpv6`).
 
-**Options:**
+When the rule tree requests a field, the parser computes the byte offset based on the protocol stack structure and attempts extraction -- no next-header or port checks needed. The rule tree's matching operators handle correctness: if a rule requests `UdpSrcPort` on an ICMPv6 packet, the `Ipv6Nxt` field with `MO=Equal, TV=17` prunes that branch before deeper fields are evaluated.
 
-- `-r, --rules <PATH>` - Path to rules JSON file
-- `-p, --pcap <PATH>` - Path to pcapng file
-- `-d, --debug` - Enable verbose debug output
-- `-m, --max-packets <N>` - Limit number of packets to process
-- `--first-packet-direction <UP|DOWN>` - Direction of first packet, default: UP
-- `-v, --verify` - Verify compression by decompressing and comparing
-
-#### Visualize Rule Tree
-
-```bash
-cargo run --release --bin tree_builder -- \
-    --rules test-rule.json
-```
-
-#### Live Capture and Compress
-
-Capture packets from a live network interface and analyze compression in real-time:
-
-```bash
-# List available network interfaces
-cargo run --release --bin live_compressor -- --list-interfaces
-
-# Capture and compress packets from an interface
-cargo run --release --bin live_compressor -- \
-    --interface eth0 \
-    --rules rules.json \
-    --debug
-```
-
-**Options:**
-
-- `-i, --interface <NAME>` - Network interface to capture from
-- `--list-interfaces` - List available network interfaces
-- `-r, --rules <PATH>` - Path to rules JSON file
-- `-d, --debug` - Enable verbose debug output
-- `-m, --max-packets <N>` - Limit number of packets to process (0 = unlimited)
-
-**Notes:**
-
-- Requires elevated privileges (Administrator/sudo) to capture packets
-- Automatically detects packet direction based on MAC address
-- Press `Ctrl+C` to stop capture and show summary statistics
-
-#### Decompression Data Flow
-
-The decompression process follows these steps:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          DECOMPRESSION PIPELINE                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│   Compressed Data                                                           │
-│   [Rule ID | Residues | Payload]                                            │
-│        │                                                                    │
-│        ▼                                                                    │
-│   1. match_rule_id()                                                        │
-│      ├─ Variable-length rule ID matching                                    │
-│      ├─ Rules checked in decreasing rule_id_length order                    │
-│      └─ Returns matching Rule structure                                     │
-│        │                                                                    │
-│        ▼                                                                    │
-│   2. decompress_field() for each field in rule                              │
-│      ├─ not-sent:      Restore value from Target Value (TV)                 │
-│      ├─ value-sent:    Read full value from residue bits                    │
-│      ├─ mapping-sent:  Read index, lookup in TV mapping array               │
-│      ├─ LSB:           Combine MSB from TV + LSB from residue               │
-│      └─ compute:       Mark for computation (checksum, length)              │
-│        │                                                                    │
-│        ▼                                                                    │
-│   3. build_headers()                                                        │
-│      ├─ Determine protocol stack (IPv4/IPv6, UDP, QUIC)                     │
-│      ├─ Build headers in order with proper byte alignment                   │
-│      ├─ Compute checksums (IPv4 header, UDP pseudo-header)                  │
-│      └─ Calculate lengths (IP total length, UDP length)                     │
-│        │                                                                    │
-│        ▼                                                                    │
-│   Reconstructed Packet                                                      │
-│   [IP Header | UDP Header | QUIC Header | Payload]                          │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+This enables compression of protocols on non-standard ports (e.g., CoAP on port 9999, QUIC on port 1234) without any configuration changes.
 
 ## Rule Format
 
-Rules are defined in JSON format following the SCHC RFC 8724 specification. For this implementation, it is assumed that the rules follow the format of packet headers:
+Rules are defined in JSON following RFC 8724:
 
 ```json
 [
   {
     "RuleID": 1,
     "RuleIDLength": 8,
-    "Comment": "IPv6/UDP compression rule",
     "Compression": [
       { "FID": "IPV6.VER", "FL": 4, "TV": 6, "MO": "equal", "CDA": "not-sent" },
       { "FID": "IPV6.TC", "FL": 8, "MO": "ignore", "CDA": "value-sent" },
-      {
-        "FID": "IPV6.FL",
-        "FL": 20,
-        "TV": 4568,
-        "MO": "MSB",
-        "MO.val": 12,
-        "CDA": "LSB"
-      },
+      { "FID": "IPV6.FL", "FL": 20, "TV": 4568, "MO": "MSB", "MO.val": 12, "CDA": "LSB" },
       { "FID": "IPV6.LEN", "MO": "ignore", "CDA": "compute" },
-      {
-        "FID": "IPV6.NXT",
-        "FL": 8,
-        "TV": 17,
-        "MO": "equal",
-        "CDA": "not-sent"
-      },
-      {
-        "FID": "IPV6.HOP_LMT",
-        "TV": [64, 128, 255],
-        "MO": "match-mapping",
-        "CDA": "mapping-sent"
-      }
+      { "FID": "IPV6.NXT", "FL": 8, "TV": 17, "MO": "equal", "CDA": "not-sent" },
+      { "FID": "IPV6.HOP_LMT", "TV": [64, 128, 255], "MO": "match-mapping", "CDA": "mapping-sent" }
     ]
   }
 ]
 ```
 
-### Field Properties
-
 | Property | Description                                         | Required                            |
 | -------- | --------------------------------------------------- | ----------------------------------- |
-| `FID`    | Field Identifier (e.g., `IPV6.VER`, `UDP.SRC_PORT`) | ✓                                   |
-| `FL`     | Field Length in bits                                | Optional (uses default)             |
+| `FID`    | Field Identifier (e.g., `IPV6.VER`, `UDP.SRC_PORT`) | Yes                                 |
+| `FL`     | Field Length in bits                                 | Optional (uses protocol default)    |
 | `DI`     | Direction Indicator (`"up"`, `"down"`, `"bi"`)      | Optional (default: `"bi"`)          |
 | `TV`     | Target Value for matching                           | For `equal`, `MSB`, `match-mapping` |
-| `MO`     | Matching Operator                                   | ✓                                   |
+| `MO`     | Matching Operator                                   | Yes                                 |
 | `MO.val` | MO parameter (e.g., MSB bit count)                  | For `MSB`                           |
-| `CDA`    | Compression/Decompression Action                    | ✓                                   |
+| `CDA`    | Compression/Decompression Action                    | Yes                                 |
 
 ## Architecture
 
-The codebase is organized into focused modules:
-
 ```
 src/
-├── lib.rs              # Public API exports
-├── error.rs            # Error types
-├── field_id.rs         # Protocol field identifiers (generated at compile time)
-├── rule.rs             # Rule parsing and structures
-├── parser.rs           # Streaming packet parser
-├── matcher.rs          # Matching operators (equal, ignore, MSB, match-mapping)
-├── compressor.rs       # Compression actions (CDAs)
-├── decompressor.rs     # Decompression logic (rule ID matching, field restoration)
-├── packet_builder.rs   # Header reconstruction
-├── tree.rs             # Rule tree structures
-├── tree_display.rs     # Tree visualization
-├── streaming_tree.rs   # Integration layer (unified parse+match+compress)
-├── build.rs            # Build script that generates FieldId enum from field-context.json
-└── bin/
-    ├── compressor.rs      # CLI compression tool (pcap files)
-    ├── live_compressor.rs # Live interface packet capture
-    └── tree_builder.rs    # Tree visualization tool
+  lib.rs              # Public API re-exports
+  error.rs            # Error types (SchcError)
+  field_id.rs         # Protocol field identifiers (generated from field-context.json)
+  rule.rs             # Rule parsing and structures
+  parser.rs           # Streaming packet parser (SID-driven, permissive)
+  matcher.rs          # Matching operators (equal, ignore, MSB, match-mapping)
+  compressor.rs       # Compression actions (CDAs)
+  decompressor.rs     # Decompression (rule ID matching, field restoration)
+  packet_builder.rs   # Header reconstruction with checksums
+  tree.rs             # Rule tree structures
+  tree_display.rs     # Tree visualization
+  streaming_tree.rs   # Integration layer (unified parse+match+compress)
+  bit_buffer.rs       # Bit-level I/O
+  build.rs            # Code generation for FieldId enum from field-context.json
+bin/
+  compressor.rs       # CLI: compress packets from pcap files
+  live_compressor.rs  # CLI: live interface capture and compress
+  tree_builder.rs     # CLI: rule tree visualization
 ```
 
-### Module Responsibilities
+## CLI Tools
 
-| Module              | Purpose                                                                                                |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `decompressor.rs`   | Matches rule IDs with variable-length encoding, restores field values from residues using inverse CDAs |
-| `packet_builder.rs` | Constructs proper protocol headers with correct byte ordering, computes checksums, calculates lengths  |
-| `streaming_tree.rs` | Unified compression pipeline that parses fields on-demand during tree traversal                        |
-| `parser.rs`         | Zero-copy packet parsing supporting Ethernet, IPv4, IPv6, UDP, and QUIC headers                        |
+Build with `cargo build --release --features bins`.
 
-## Example Output
+```bash
+# Compress packets from a pcap file
+cargo run --release --features bins --bin compressor -- \
+    --rules rules.json --pcap capture.pcapng --verify
 
+# Visualize the rule tree
+cargo run --release --features bins --bin tree_builder -- \
+    --rules rules.json
+
+# Live capture and compress (requires elevated privileges)
+cargo run --release --features bins --bin live_compressor -- \
+    --interface eth0 --rules rules.json
 ```
-================================================================================
-Processing packets
-================================================================================
 
-Packet 1: 48.0 bytes -> 3.5 bytes (Rule: 63/8 - Saved: 44.50 bytes / 356 bits, 92.7%)
-Packet 2: 48.0 bytes -> 3.5 bytes (Rule: 63/8 - Saved: 44.50 bytes / 356 bits, 92.7%)
-...
+## Minimum Supported Rust Version
 
-================================================================================
-SUMMARY
-================================================================================
-Total packets processed:    100
-Successfully compressed:    100
-Total original header:      38400 bits (4800.0 bytes)
-Total compressed header:    2800 bits (350.0 bytes)
-Total bits saved:           35600 bits (4450.00 bytes, 92.7%)
-Compression ratio:          13.71:1
-================================================================================
-```
+The MSRV is **1.85** (Rust edition 2024).
 
 ## References
 
 - [RFC 8724 - SCHC: Generic Framework for Static Context Header Compression and Fragmentation](https://www.rfc-editor.org/rfc/rfc8724)
-- [RFC 8824 - Static Context Header Compression (SCHC) for the Constrained Application Protocol (CoAP)](https://www.rfc-editor.org/rfc/rfc8824)
-- [RFC 9011 - Static Context Header Compression (SCHC) over LoRaWAN](https://www.rfc-editor.org/rfc/rfc9011)
+- [RFC 8824 - Static Context Header Compression (SCHC) for CoAP](https://www.rfc-editor.org/rfc/rfc8824)
+- [RFC 9363 - YANG Data Model for SCHC](https://datatracker.ietf.org/doc/rfc9363/)
+- [RFC 9011 - SCHC over LoRaWAN](https://www.rfc-editor.org/rfc/rfc9011)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT

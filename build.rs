@@ -67,6 +67,21 @@ fn get_size_bits(def: &FieldDefinition) -> Option<u16> {
     }
 }
 
+/// Map a field ID prefix to a Protocol enum variant name
+fn get_protocol_variant(field_id: &str) -> &'static str {
+    let prefix = field_id.split('.').next().unwrap_or("");
+    match prefix {
+        "IPV4" => "Ipv4",
+        "IPV6" => "Ipv6",
+        "UDP" => "Udp",
+        "COAP" => "Coap",
+        "QUIC" => "Quic",
+        "ICMPV6" => "Icmpv6",
+        "IP" => "Ip",
+        _ => "Unknown",
+    }
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let json_path = Path::new(&manifest_dir).join("field-context.json");
@@ -91,6 +106,7 @@ fn main() {
     let mut as_str_arms = String::new();
     let mut from_str_arms = String::new();
     let mut size_arms = String::new();
+    let mut protocol_arms = String::new();
 
     for (field_id, def) in &entries {
         let variant = to_variant_name(field_id);
@@ -122,6 +138,13 @@ fn main() {
                 variant
             ));
         }
+
+        // protocol() match arm — derive from field name prefix
+        let protocol_variant = get_protocol_variant(field_id);
+        protocol_arms.push_str(&format!(
+            "            FieldId::{} => Protocol::{},\n",
+            variant, protocol_variant
+        ));
     }
 
     // Generate the complete source file
@@ -133,8 +156,27 @@ use serde::{{Deserialize, Deserializer, Serialize, Serializer}};
 use std::fmt;
 use std::str::FromStr;
 
+/// Protocol family that a field belongs to.
+///
+/// Derived from the field name prefix (e.g., `IPV6.NXT` → `Ipv6`).
+/// Useful for determining which protocols a rule requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Protocol {{
+    Ip,
+    Ipv4,
+    Ipv6,
+    Udp,
+    Coap,
+    Quic,
+    Icmpv6,
+    Unknown,
+}}
+
 /// Unique identifier for packet header fields across all supported protocols.
-/// 
+///
+/// Each variant maps 1:1 to a SID from YANG/CORECONF. The variant itself
+/// serves as a SID-based hint for protocol determination during parsing.
+///
 /// This enum is auto-generated from field-context.json at compile time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FieldId {{
@@ -152,6 +194,14 @@ impl FieldId {{
     pub fn default_size_bits(&self) -> Option<u16> {{
         match self {{
 {size_arms}        }}
+    }}
+
+    /// Returns the protocol family this field belongs to.
+    ///
+    /// Derived from the field name prefix (e.g., `UdpSrcPort` → `Protocol::Udp`).
+    pub fn protocol(&self) -> Protocol {{
+        match self {{
+{protocol_arms}        }}
     }}
 }}
 
@@ -204,6 +254,7 @@ impl<'de> Deserialize<'de> for FieldId {{
         enum_variants = enum_variants,
         as_str_arms = as_str_arms,
         size_arms = size_arms,
+        protocol_arms = protocol_arms,
         from_str_arms = from_str_arms,
     );
 

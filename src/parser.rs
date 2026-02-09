@@ -1,7 +1,14 @@
-//! Streaming Packet Parser
+//! Streaming Packet Parser — SID-driven, permissive extraction.
 //!
 //! On-demand field extraction from raw packets. Fields are parsed lazily
 //! during tree traversal to enable early pruning when mismatches are detected.
+//!
+//! Protocol detection is SID-driven: when the rule tree requests a field via
+//! its [`FieldId`] (which maps 1:1 to a SID), the parser computes the byte
+//! offset and attempts extraction without checking next-header values or
+//! well-known ports. Correctness is enforced by the matching operators in
+//! the rule tree — discriminating fields like `Ipv6Nxt` with `MO=Equal`
+//! naturally prune branches for the wrong protocol.
 
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::ipv6::Ipv6Packet;
@@ -152,13 +159,16 @@ pub struct StreamingParser<'a> {
     raw: &'a [u8],
     ip_start: usize,
     layer: ProtocolLayer,
-    next_protocol: Option<u8>,
     direction: Direction,
     pub(crate) parsed_fields: HashMap<FieldId, FieldValue>,
     /// QUIC context for tracking connection ID lengths
     quic_ctx: QuicContext,
     /// CoAP context for tracking token length
     coap_ctx: CoapContext,
+    /// Payload offset set during field extraction (transport payload start).
+    /// Used by `payload()`, `header_length()`, and `payload_start()` to
+    /// return correct offsets regardless of which protocol was parsed.
+    payload_offset: Option<usize>,
     /// Link layer configuration (stored for potential packet reconstruction)
     #[allow(dead_code)]
     link_layer: LinkLayer,
@@ -203,11 +213,11 @@ impl<'a> StreamingParser<'a> {
             raw,
             ip_start,
             layer,
-            next_protocol: None,
             direction,
             parsed_fields: HashMap::new(),
             quic_ctx: QuicContext::default(),
             coap_ctx: CoapContext::default(),
+            payload_offset: None,
             link_layer,
         })
     }
@@ -264,7 +274,8 @@ impl<'a> StreamingParser<'a> {
                 }
             }
 
-            // IPv4 Fields
+            // IPv4 Fields — attempt parsing regardless of detected layer;
+            // Ipv4Packet::new() returns None if the data isn't a valid IPv4 header.
             FieldId::Ipv4Ver
             | FieldId::Ipv4Ihl
             | FieldId::Ipv4Dscp
@@ -277,18 +288,10 @@ impl<'a> StreamingParser<'a> {
             | FieldId::Ipv4Proto
             | FieldId::Ipv4Chksum
             | FieldId::Ipv4Src
-            | FieldId::Ipv4Dst => {
-                if self.layer != ProtocolLayer::Ipv4 {
-                    return Ok(None);
-                }
-                self.extract_ipv4_field(ip_data, fid)
-            }
+            | FieldId::Ipv4Dst => self.extract_ipv4_field(ip_data, fid),
 
             // Direction-based IPv4 addresses
             FieldId::Ipv4Dev | FieldId::Ipv4App => {
-                if self.layer != ProtocolLayer::Ipv4 {
-                    return Ok(None);
-                }
                 let is_dev = matches!(fid, FieldId::Ipv4Dev);
                 let source_fid = if self.get_directional_source(is_dev) {
                     FieldId::Ipv4Src
@@ -298,7 +301,8 @@ impl<'a> StreamingParser<'a> {
                 self.extract_field(source_fid)
             }
 
-            // IPv6 Fields
+            // IPv6 Fields — attempt parsing regardless of detected layer;
+            // Ipv6Packet::new() returns None if the data isn't a valid IPv6 header.
             FieldId::Ipv6Ver
             | FieldId::Ipv6Tc
             | FieldId::Ipv6Fl
@@ -310,12 +314,7 @@ impl<'a> StreamingParser<'a> {
             | FieldId::Ipv6SrcPrefix
             | FieldId::Ipv6SrcIid
             | FieldId::Ipv6DstPrefix
-            | FieldId::Ipv6DstIid => {
-                if self.layer != ProtocolLayer::Ipv6 {
-                    return Ok(None);
-                }
-                self.extract_ipv6_field(ip_data, fid)
-            }
+            | FieldId::Ipv6DstIid => self.extract_ipv6_field(ip_data, fid),
 
             // Direction-based IPv6 fields
             FieldId::Ipv6DevPrefix | FieldId::Ipv6AppPrefix => {
@@ -409,15 +408,11 @@ impl<'a> StreamingParser<'a> {
         }
     }
 
-    fn extract_ipv4_field(&mut self, data: &[u8], fid: FieldId) -> Result<Option<FieldValue>> {
+    fn extract_ipv4_field(&self, data: &[u8], fid: FieldId) -> Result<Option<FieldValue>> {
         let ipv4 = match Ipv4Packet::new(data) {
             Some(p) => p,
             None => return Ok(None),
         };
-
-        if self.next_protocol.is_none() {
-            self.next_protocol = Some(ipv4.get_next_level_protocol().0);
-        }
 
         let value = match fid {
             FieldId::Ipv4Ver => FieldValue::U8(ipv4.get_version()),
@@ -439,15 +434,11 @@ impl<'a> StreamingParser<'a> {
         Ok(Some(value))
     }
 
-    fn extract_ipv6_field(&mut self, data: &[u8], fid: FieldId) -> Result<Option<FieldValue>> {
+    fn extract_ipv6_field(&self, data: &[u8], fid: FieldId) -> Result<Option<FieldValue>> {
         let ipv6 = match Ipv6Packet::new(data) {
             Some(p) => p,
             None => return Ok(None),
         };
-
-        if self.next_protocol.is_none() {
-            self.next_protocol = Some(ipv6.get_next_header().0);
-        }
 
         let value = match fid {
             FieldId::Ipv6Ver => FieldValue::U8(ipv6.get_version()),
@@ -512,6 +503,11 @@ impl<'a> StreamingParser<'a> {
             None => return Ok(None),
         };
 
+        // Track transport payload offset for payload()/header_length()
+        if self.payload_offset.is_none() {
+            self.payload_offset = Some(udp_start + 8);
+        }
+
         let value = match fid {
             FieldId::UdpSrcPort => FieldValue::U16(udp.get_source()),
             FieldId::UdpDstPort => FieldValue::U16(udp.get_destination()),
@@ -523,64 +519,76 @@ impl<'a> StreamingParser<'a> {
         Ok(Some(value))
     }
 
-    fn get_udp_start(&mut self) -> Result<usize> {
-        if self.next_protocol.is_none() {
-            let ip_data = &self.raw[self.ip_start..];
-            match self.layer {
-                ProtocolLayer::Ipv4 => {
-                    if let Some(ipv4) = Ipv4Packet::new(ip_data) {
-                        self.next_protocol = Some(ipv4.get_next_level_protocol().0);
+    /// Compute the transport header start offset.
+    ///
+    /// Uses the detected IP layer for offset computation. For Unknown layers,
+    /// falls back to first-nibble detection for offset computation only.
+    /// No next-header or protocol checks — protocol correctness is enforced
+    /// by the rule tree's matching operators.
+    fn get_udp_start(&self) -> Result<usize> {
+        let ip_data = &self.raw[self.ip_start..];
+        let layer = match self.layer {
+            ProtocolLayer::Unknown => {
+                // Fallback: use first nibble for offset computation
+                if self.ip_start < self.raw.len() {
+                    match (self.raw[self.ip_start] >> 4) & 0x0F {
+                        4 => ProtocolLayer::Ipv4,
+                        6 => ProtocolLayer::Ipv6,
+                        _ => return Err(SchcError::PacketParse("Unknown IP layer".to_string())),
                     }
+                } else {
+                    return Err(SchcError::PacketParse("Unknown IP layer".to_string()));
                 }
-                ProtocolLayer::Ipv6 => {
-                    if let Some(ipv6) = Ipv6Packet::new(ip_data) {
-                        self.next_protocol = Some(ipv6.get_next_header().0);
-                    }
-                }
-                _ => {}
             }
-        }
+            other => other,
+        };
 
-        if self.next_protocol != Some(17) {
-            return Err(SchcError::PacketParse("Not a UDP packet".to_string()));
-        }
-
-        let udp_start = match self.layer {
+        let udp_start = match layer {
             ProtocolLayer::Ipv4 => {
-                if let Some(ipv4) = Ipv4Packet::new(&self.raw[self.ip_start..]) {
+                if let Some(ipv4) = Ipv4Packet::new(ip_data) {
                     self.ip_start + (ipv4.get_header_length() as usize) * 4
                 } else {
                     return Err(SchcError::PacketParse("Invalid IPv4 packet".to_string()));
                 }
             }
             ProtocolLayer::Ipv6 => self.ip_start + 40,
-            _ => return Err(SchcError::PacketParse("Unknown IP layer".to_string())),
+            ProtocolLayer::Unknown => unreachable!(),
         };
 
         Ok(udp_start)
     }
 
-    /// Get the total header length (IP + transport) in bytes
-    /// Returns the header size excluding the ethernet header
-    pub fn header_length(&mut self) -> Result<usize> {
-        let udp_start = self.get_udp_start()?;
-        Ok(udp_start + 8 - 14) // Subtract ethernet header (14 bytes) for actual IP+UDP header
-    }
-
-    /// Get the payload start offset (after all protocol headers)
-    /// This returns the absolute offset in the raw packet where the payload begins
-    pub fn payload_start(&mut self) -> Result<usize> {
-        // For UDP, payload starts right after the 8-byte UDP header
-        let udp_start = self.get_udp_start()?;
-        Ok(udp_start + 8)
-    }
-
-    /// Get the payload bytes from the packet
-    /// Returns the data after all protocol headers (IP + transport + application layer)
+    /// Get the total header length (IP + transport) in bytes.
     ///
-    /// If CoAP fields were parsed, returns the CoAP application payload (after header + token + options).
-    /// Otherwise returns the data after the transport header.
-    pub fn payload(&mut self) -> Result<&[u8]> {
+    /// Uses `payload_offset` if transport fields have been parsed, otherwise
+    /// falls back to computing from the IP layer.
+    /// Returns the header size excluding the link layer header.
+    pub fn header_length(&self) -> Result<usize> {
+        let payload_start = if let Some(offset) = self.payload_offset {
+            offset
+        } else {
+            self.get_udp_start()? + 8
+        };
+        Ok(payload_start - self.link_layer.header_len())
+    }
+
+    /// Get the payload start offset (after all protocol headers).
+    ///
+    /// Uses `payload_offset` if transport fields have been parsed, otherwise
+    /// falls back to computing from the IP layer.
+    /// Returns the absolute offset in the raw packet where the payload begins.
+    pub fn payload_start(&self) -> Result<usize> {
+        if let Some(offset) = self.payload_offset {
+            Ok(offset)
+        } else {
+            Ok(self.get_udp_start()? + 8)
+        }
+    }
+
+    /// Get the payload bytes from the packet.
+    ///
+    /// Priority: CoAP payload start > tracked payload_offset > computed from IP layer.
+    pub fn payload(&self) -> Result<&[u8]> {
         // If CoAP was parsed, use the CoAP payload start
         if let Some(coap_payload_start) = self.coap_ctx.payload_start {
             if coap_payload_start <= self.raw.len() {
@@ -599,42 +607,15 @@ impl<'a> StreamingParser<'a> {
         }
     }
 
-    /// Get the QUIC header start offset (after UDP header)
-    /// Returns None if UDP ports don't indicate QUIC traffic
-    fn get_quic_start(&mut self) -> Result<Option<usize>> {
-        let udp_start = self.get_udp_start()?;
-
-        // Check if this is QUIC traffic by examining UDP ports
-        // Reuse already-parsed UDP port fields instead of reading raw bytes again
-        // QUIC typically uses port 443 (HTTPS over QUIC) or 4433 (alternate QUIC port)
-
-        // Parse UDP source and destination ports if not already cached
-        let src_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpSrcPort) {
-            *p
-        } else {
-            return Ok(None);
-        };
-
-        let dst_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpDstPort) {
-            *p
-        } else {
-            return Ok(None);
-        };
-
-        // Only parse QUIC if either port is a known QUIC port
-        // 443 = HTTPS/QUIC, 4433 = alternate QUIC, 8080 = quinn-workbench default
-        const QUIC_PORTS: [u16; 3] = [443, 4433, 8080];
-        let is_quic = QUIC_PORTS.contains(&src_port) || QUIC_PORTS.contains(&dst_port);
-        if !is_quic {
-            return Ok(None);
-        }
-
-        Ok(Some(udp_start + 8)) // UDP header is 8 bytes
+    /// Get the QUIC header start offset (after UDP header).
+    ///
+    /// No port checking — protocol determination is SID-driven. If the rule
+    /// tree requests QUIC fields, we compute the offset and attempt parsing.
+    fn get_quic_start(&self) -> Result<usize> {
+        Ok(self.get_udp_start()? + 8) // UDP header is 8 bytes
     }
 
     /// Extract QUIC header fields
-    ///
-    /// QUIC is only parsed when UDP port is 443, 4433, or 8080.
     ///
     /// QUIC header structure (RFC 9000):
     /// - Long Header (first bit = 1):
@@ -652,9 +633,8 @@ impl<'a> StreamingParser<'a> {
     ///   - ... (packet number)
     fn extract_quic_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let quic_start = match self.get_quic_start() {
-            Ok(Some(start)) => start,
-            Ok(None) => return Ok(None), // Not a QUIC packet (wrong ports)
-            Err(_) => return Ok(None),   // Not a UDP packet
+            Ok(start) => start,
+            Err(_) => return Ok(None), // Cannot compute transport offset
         };
 
         if quic_start >= self.raw.len() {
@@ -860,33 +840,12 @@ impl<'a> StreamingParser<'a> {
     // CoAP Parsing
     // =========================================================================
 
-    /// Get the CoAP header start offset (after UDP header)
-    /// Returns None if UDP ports don't indicate CoAP traffic
-    fn get_coap_start(&mut self) -> Result<Option<usize>> {
-        let udp_start = self.get_udp_start()?;
-
-        // Check if this is CoAP traffic by examining UDP ports
-        // CoAP typically uses port 5683 (CoAP) or 5684 (CoAPS/DTLS)
-        let src_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpSrcPort) {
-            *p
-        } else {
-            return Ok(None);
-        };
-
-        let dst_port = if let Ok(Some(FieldValue::U16(p))) = self.parse_field(FieldId::UdpDstPort) {
-            *p
-        } else {
-            return Ok(None);
-        };
-
-        // Only parse CoAP if either port is a known CoAP port
-        const COAP_PORTS: [u16; 2] = [5683, 5684];
-        let is_coap = COAP_PORTS.contains(&src_port) || COAP_PORTS.contains(&dst_port);
-        if !is_coap {
-            return Ok(None);
-        }
-
-        Ok(Some(udp_start + 8)) // UDP header is 8 bytes
+    /// Get the CoAP header start offset (after UDP header).
+    ///
+    /// No port checking — protocol determination is SID-driven. If the rule
+    /// tree requests CoAP fields, we compute the offset and attempt parsing.
+    fn get_coap_start(&self) -> Result<usize> {
+        Ok(self.get_udp_start()? + 8) // UDP header is 8 bytes
     }
 
     /// Extract CoAP header fields
@@ -898,9 +857,8 @@ impl<'a> StreamingParser<'a> {
     /// Bytes 4+: Token (TKL bytes, 0-8)
     fn extract_coap_field(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let coap_start = match self.get_coap_start() {
-            Ok(Some(start)) => start,
-            Ok(None) => return Ok(None), // Not a CoAP packet (wrong ports)
-            Err(_) => return Ok(None),   // Not a UDP packet
+            Ok(start) => start,
+            Err(_) => return Ok(None), // Cannot compute transport offset
         };
 
         if coap_start >= self.raw.len() {
@@ -983,9 +941,8 @@ impl<'a> StreamingParser<'a> {
     /// For repeatable options (e.g., Uri-Path), returns the concatenated value.
     fn extract_coap_option(&mut self, fid: FieldId) -> Result<Option<FieldValue>> {
         let coap_start = match self.get_coap_start() {
-            Ok(Some(start)) => start,
-            Ok(None) => return Ok(None), // Not a CoAP packet (wrong ports)
-            Err(_) => return Ok(None),   // Not a UDP packet
+            Ok(start) => start,
+            Err(_) => return Ok(None), // Cannot compute transport offset
         };
 
         if coap_start >= self.raw.len() {
@@ -1218,9 +1175,9 @@ impl<'a> StreamingParser<'a> {
     /// This virtual field is inserted by the tree builder when CoAP options are present
     /// in a rule, and must be matched to ensure proper packet parsing.
     fn extract_coap_marker(&mut self) -> Result<Option<FieldValue>> {
-        let coap_start = match self.get_coap_start()? {
-            Some(start) => start,
-            None => return Ok(None), // Not a CoAP packet
+        let coap_start = match self.get_coap_start() {
+            Ok(start) => start,
+            Err(_) => return Ok(None), // Cannot compute transport offset
         };
 
         if coap_start >= self.raw.len() {
@@ -1258,24 +1215,14 @@ impl<'a> StreamingParser<'a> {
     // ICMPv6 Parsing
     // =========================================================================
 
-    /// Get the ICMPv6 header start offset
-    /// Returns None if not an ICMPv6 packet (IPv6 Next Header != 58)
-    fn get_icmpv6_start(&mut self) -> Result<Option<usize>> {
-        // ICMPv6 only works with IPv6
+    /// Get the ICMPv6 header start offset.
+    ///
+    /// Keeps the IPv6 layer check because ICMPv6 offset computation is
+    /// IPv6-specific (ip_start + 40). No next-header check — protocol
+    /// correctness is enforced by the rule tree's matching operators.
+    fn get_icmpv6_start(&self) -> Result<Option<usize>> {
+        // ICMPv6 offset computation requires IPv6 (fixed 40-byte header)
         if self.layer != ProtocolLayer::Ipv6 {
-            return Ok(None);
-        }
-
-        // Parse next protocol if not already done
-        if self.next_protocol.is_none() {
-            let ip_data = &self.raw[self.ip_start..];
-            if let Some(ipv6) = Ipv6Packet::new(ip_data) {
-                self.next_protocol = Some(ipv6.get_next_header().0);
-            }
-        }
-
-        // ICMPv6 protocol number is 58
-        if self.next_protocol != Some(58) {
             return Ok(None);
         }
 
@@ -1303,6 +1250,12 @@ impl<'a> StreamingParser<'a> {
         let icmpv6_data = &self.raw[icmpv6_start..];
         if icmpv6_data.len() < 4 {
             return Ok(None); // ICMPv6 header must be at least 4 bytes
+        }
+
+        // Track transport payload offset (ICMPv6 header is at least 4 bytes;
+        // type-specific headers extend it but the base payload starts at +4)
+        if self.payload_offset.is_none() {
+            self.payload_offset = Some(icmpv6_start + 4);
         }
 
         let icmp_type = icmpv6_data[0];
@@ -1407,21 +1360,21 @@ pub fn parse_packet_fields(
             FieldId::UdpDstPort,
             FieldId::UdpLen,
             FieldId::UdpCksum,
-            // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
+            // QUIC fields (attempted permissively)
             FieldId::QuicFirstByte,
             FieldId::QuicVersion,
             FieldId::QuicDcidLen,
             FieldId::QuicDcid,
             FieldId::QuicScidLen,
             FieldId::QuicScid,
-            // CoAP fields (only attempt if we have a UDP packet with CoAP ports)
+            // CoAP fields (attempted permissively)
             FieldId::CoapVer,
             FieldId::CoapType,
             FieldId::CoapTkl,
             FieldId::CoapCode,
             FieldId::CoapMid,
             FieldId::CoapToken,
-            // ICMPv6 fields (only attempt if next header is 58)
+            // ICMPv6 fields (attempted permissively; requires IPv6 for offset)
             FieldId::Icmpv6Type,
             FieldId::Icmpv6Code,
             FieldId::Icmpv6Checksum,
@@ -1449,14 +1402,14 @@ pub fn parse_packet_fields(
             FieldId::UdpDstPort,
             FieldId::UdpLen,
             FieldId::UdpCksum,
-            // QUIC fields (only attempt if we have a UDP packet with QUIC ports)
+            // QUIC fields (attempted permissively)
             FieldId::QuicFirstByte,
             FieldId::QuicVersion,
             FieldId::QuicDcidLen,
             FieldId::QuicDcid,
             FieldId::QuicScidLen,
             FieldId::QuicScid,
-            // CoAP fields (only attempt if we have a UDP packet with CoAP ports)
+            // CoAP fields (attempted permissively)
             FieldId::CoapVer,
             FieldId::CoapType,
             FieldId::CoapTkl,
@@ -1856,7 +1809,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Cross-layer field access tests
+    // Cross-layer field access tests (permissive parsing)
     // =========================================================================
 
     #[test]
@@ -1864,7 +1817,8 @@ mod tests {
         let packet = create_ipv4_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
 
-        // Should return None, not an error
+        // With permissive parsing: Ipv6Packet::new requires 40 bytes but the
+        // IPv4 IP data is only 28 bytes, so it returns None naturally.
         let result = parser.parse_field(FieldId::Ipv6Ver).unwrap();
         assert!(result.is_none());
     }
@@ -1874,9 +1828,11 @@ mod tests {
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
 
-        // Should return None, not an error
+        // With permissive parsing: Ipv4Packet::new succeeds (enough bytes),
+        // so the parser returns a value. The rule tree's matching operators
+        // (e.g., Ipv4Ver MO=Equal, tv=4) will prune this branch.
         let result = parser.parse_field(FieldId::Ipv4Ver).unwrap();
-        assert!(result.is_none());
+        assert!(result.is_some(), "Permissive parsing attempts extraction regardless of layer");
     }
 
     // =========================================================================
@@ -2036,30 +1992,30 @@ mod tests {
     }
 
     #[test]
-    fn test_non_quic_udp_packet_no_quic_fields() {
-        // Standard UDP packet (port 8080, not 443/4433) should not parse QUIC fields
+    fn test_udp_packet_no_payload_no_quic_fields() {
+        // UDP packet with no payload after headers — QUIC offset exceeds packet length
         let packet = create_ipv6_udp_packet();
         let mut parser = StreamingParser::new(&packet, Direction::Up).unwrap();
 
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
         assert!(
             first_byte.is_none(),
-            "Non-QUIC UDP packet should not have QUIC fields"
+            "UDP packet with no payload should not have QUIC fields"
         );
 
         let version = parser.parse_field(FieldId::QuicVersion).unwrap();
         assert!(
             version.is_none(),
-            "Non-QUIC UDP packet should not have QUIC version"
+            "UDP packet with no payload should not have QUIC version"
         );
     }
 
     #[test]
-    fn test_quic_port_4433() {
-        // Create packet with port 4433 instead of 443
+    fn test_quic_non_standard_port() {
+        // With SID-driven parsing, QUIC fields are extracted regardless of port.
         let mut packet = create_ipv6_quic_long_header_packet();
 
-        // Modify destination port to 4433 (0x1151)
+        // Modify destination port to 4433 (0x1151) — a non-standard port
         // UDP header starts at offset 14 (ethernet) + 40 (IPv6) = 54
         // Destination port is at bytes 54+2 and 54+3
         packet[56] = 0x11;
@@ -2070,7 +2026,7 @@ mod tests {
         let first_byte = parser.parse_field(FieldId::QuicFirstByte).unwrap();
         assert!(
             first_byte.is_some(),
-            "Port 4433 should be recognized as QUIC"
+            "QUIC fields should be extractable regardless of port"
         );
     }
 
