@@ -79,6 +79,7 @@ pub fn msb_match(pv: &FieldValue, tv: &RuleValue, bits: u8, fid: FieldId) -> boo
 // =============================================================================
 
 /// Result of checking a branch match
+#[derive(Debug)]
 pub enum BranchMatchResult {
     /// Field matched - contains the parsed field value
     Matched(Option<FieldValue>),

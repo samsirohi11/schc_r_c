@@ -13,7 +13,7 @@
 
 use crate::error::{Result, SchcError};
 use crate::field_id::FieldId;
-use crate::rule::{Rule, MatchingOperator, CompressionAction};
+use crate::rule::Rule;
 use crate::tree::is_coap_option_field;
 
 // Re-export core types from submodules
@@ -85,6 +85,7 @@ pub fn compress_packet_with_link_layer(
                 // Finally: higher rule_id is better (newer/dynamic rules)
                 .then_with(|| a.rule_id.cmp(&b.rule_id))
         })
+        // matches is non-empty — checked above with early return on is_empty()
         .unwrap();
 
     // Extract original header bytes for display
@@ -158,6 +159,31 @@ fn coap_option_field_number(fid: FieldId) -> Option<u16> {
 }
 
 // =============================================================================
+// Debug Formatting Helpers
+// =============================================================================
+
+/// Format the target value of a branch for debug display.
+fn format_target_value(info: &BranchInfo) -> String {
+    if let Some(mapping_values) = &info.mapping_tv {
+        let mapping_strs: Vec<String> = mapping_values.iter()
+            .map(|v| v.to_string())
+            .collect();
+        format!("[{}]", mapping_strs.join(", "))
+    } else {
+        info.tv.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "*".to_string())
+    }
+}
+
+/// Returns a direction indicator symbol.
+fn di_symbol(di: Option<Direction>) -> &'static str {
+    match di {
+        Some(Direction::Up) => "↑",
+        Some(Direction::Down) => "↓",
+        None => "↔",
+    }
+}
+
+// =============================================================================
 // Tree Traversal with Integrated Parse + Match + Compress
 // =============================================================================
 
@@ -185,15 +211,8 @@ fn traverse_and_compress(
                              indent, rule_id, rule_id_length, result.savings_bits, result.savings_bits as f64 / 8.0);
                     // Show per-field breakdown
                     for detail in &result.field_details {
-                        let cda_str = match detail.cda {
-                            CompressionAction::NotSent => "not-sent",
-                            CompressionAction::ValueSent => "value-sent",
-                            CompressionAction::MappingSent => "mapping-sent",
-                            CompressionAction::Lsb => "LSB",
-                            CompressionAction::Compute => "compute",
-                        };
                         println!("{}   {} ({}): {}b -> {}b = {}b saved",
-                                 indent, detail.fid, cda_str, 
+                                 indent, detail.fid, detail.cda,
                                  detail.original_bits, detail.sent_bits, detail.savings_bits);
                     }
                     println!("{}   Rule ID overhead: {} bits", indent, rule.rule_id_length);
@@ -218,11 +237,7 @@ fn traverse_and_compress(
                     // Direction Indicator doesn't match - skip this field entirely
                     // Continue to children without parsing/advancing (DI-specific field doesn't apply)
                     if debug {
-                        let dir_symbol = match branch.info.di {
-                            Some(Direction::Up) => "↑",
-                            Some(Direction::Down) => "↓",
-                            None => "↔",
-                        };
+                        let dir_symbol = di_symbol(branch.info.di);
                         println!("{}├─ - {} {} [DI skip]: packet_dir={:?} field_di={:?}",
                                  indent, dir_symbol, branch.info.fid, parser.direction(), branch.info.di);
                     }
@@ -230,27 +245,10 @@ fn traverse_and_compress(
                 }
                 BranchMatchResult::Matched(field_value) => {
                     if debug {
-                        let mo_str = match branch.info.mo {
-                            MatchingOperator::Equal => "equal".to_string(),
-                            MatchingOperator::Ignore => "ignore".to_string(),
-                            MatchingOperator::MatchMapping => "mapping".to_string(),
-                            MatchingOperator::Msb(n) => format!("MSB({})", n),
-                        };
-                        let target_str = if let Some(mapping_values) = &branch.info.mapping_tv {
-                            let mapping_strs: Vec<String> = mapping_values.iter()
-                                .map(|v| v.to_string_repr())
-                                .collect();
-                            format!("[{}]", mapping_strs.join(", "))
-                        } else {
-                            branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
-                        };
-                        let dir_symbol = match branch.info.di {
-                            Some(Direction::Up) => "↑",
-                            Some(Direction::Down) => "↓",
-                            None => "↔",
-                        };
+                        let target_str = format_target_value(&branch.info);
+                        let dir_symbol = di_symbol(branch.info.di);
                         println!("{}├─ ✓ {} {} [{}]: packet={} target={}",
-                                 indent, dir_symbol, branch.info.fid, mo_str,
+                                 indent, dir_symbol, branch.info.fid, branch.info.mo,
                                  field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
                                  target_str);
                     }
@@ -277,20 +275,7 @@ fn traverse_and_compress(
                 }
                 BranchMatchResult::NotMatched(field_value) => {
                     if debug {
-                        let mo_str = match branch.info.mo {
-                            MatchingOperator::Equal => "equal".to_string(),
-                            MatchingOperator::Ignore => "ignore".to_string(),
-                            MatchingOperator::MatchMapping => "mapping".to_string(),
-                            MatchingOperator::Msb(n) => format!("MSB({})", n),
-                        };
-                        let target_str = if let Some(mapping_values) = &branch.info.mapping_tv {
-                            let mapping_strs: Vec<String> = mapping_values.iter()
-                                .map(|v| v.to_string_repr())
-                                .collect();
-                            format!("[{}]", mapping_strs.join(", "))
-                        } else {
-                            branch.info.tv.as_ref().map(|v| v.to_string_repr()).unwrap_or_else(|| "*".to_string())
-                        };
+                        let target_str = format_target_value(&branch.info);
                         let target_rules = find_rule_ids_in_branch(&branch.node);
                         let rule_str = if target_rules.is_empty() {
                             String::new()
@@ -300,13 +285,9 @@ fn traverse_and_compress(
                                 .collect::<Vec<_>>()
                                 .join(", "))
                         };
-                        let dir_symbol = match branch.info.di {
-                            Some(Direction::Up) => "↑",
-                            Some(Direction::Down) => "↓",
-                            None => "↔",
-                        };
+                        let dir_symbol = di_symbol(branch.info.di);
                         println!("{}├─ ✗ {} {} [{}]: packet={} target={}{}",
-                                 indent, dir_symbol, branch.info.fid, mo_str,
+                                 indent, dir_symbol, branch.info.fid, branch.info.mo,
                                  field_value.as_ref().map(|v| v.as_string()).unwrap_or_else(|| "?".to_string()),
                                  target_str, rule_str);
                     }

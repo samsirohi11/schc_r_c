@@ -114,6 +114,7 @@ impl TreeNode {
         self.branches.entry(key).or_default().push(branch);
     }
 
+    #[must_use]
     pub fn count_nodes(&self) -> usize {
         let mut count = 1;
         for branches in self.branches.values() {
@@ -124,6 +125,7 @@ impl TreeNode {
         count
     }
 
+    #[must_use]
     pub fn count_leaves(&self) -> usize {
         if self.is_leaf {
             return 1;
@@ -143,6 +145,7 @@ impl TreeNode {
 // =============================================================================
 
 /// Build a hierarchical tree from compression rules
+#[must_use]
 pub fn build_tree(rules: &[Rule]) -> TreeNode {
     let mut root = TreeNode::new_root();
 

@@ -53,7 +53,8 @@ pub fn match_rule_id<'a>(data: &[u8], rules: &'a [Rule]) -> Result<&'a Rule> {
     let bits = BitSlice::<_, Msb0>::from_slice(data);
 
     // Sort rules by rule_id_length descending for proper variable-length matching
-    let mut sorted_rules: Vec<&Rule> = rules.iter().collect();
+    let mut sorted_rules: Vec<&Rule> = Vec::with_capacity(rules.len());
+    sorted_rules.extend(rules.iter());
     sorted_rules.sort_by(|a, b| b.rule_id_length.cmp(&a.rule_id_length));
 
     for rule in sorted_rules {
@@ -109,7 +110,7 @@ pub fn decompress_packet(
     // Decompress each field according to its CDA
     // Pass already-decompressed fields for context-dependent length lookup
     // Skip fields that don't match the current direction (DI filtering)
-    let mut fields: HashMap<FieldId, FieldValue> = HashMap::new();
+    let mut fields: HashMap<FieldId, FieldValue> = HashMap::with_capacity(rule.compression.len());
 
     for field in &rule.compression {
         let field_applies = match field.di {

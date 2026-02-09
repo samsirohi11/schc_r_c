@@ -14,6 +14,7 @@ use crate::matcher::values_match;
 // =============================================================================
 
 /// Result of compressing a packet with a matched rule
+#[derive(Debug)]
 pub struct CompressionResult {
     pub rule_id: u32,
     pub rule_id_length: u8,
@@ -54,11 +55,13 @@ pub struct CompressedPacket {
 
 impl CompressedPacket {
     /// Savings in bits
+    #[must_use]
     pub fn savings_bits(&self) -> i64 {
         self.original_header_bits as i64 - self.compressed_header_bits as i64
     }
     
     /// Savings displayed as bytes (with fractional precision)
+    #[must_use]
     pub fn savings_bytes(&self) -> f64 {
         self.savings_bits() as f64 / 8.0
     }
@@ -71,7 +74,7 @@ impl CompressedPacket {
 /// Compress a packet using a matched rule
 pub fn compress_with_rule(rule: &Rule, parser: &StreamingParser) -> CompressionResult {
     let mut buf = BitBuffer::new();
-    let mut field_details = Vec::new();
+    let mut field_details = Vec::with_capacity(rule.compression.len());
     let mut total_original_bits: usize = 0;
 
     // Add Rule ID (this is overhead, counts as sent bits)
@@ -175,7 +178,7 @@ fn compress_field(buf: &mut BitBuffer, field: &Field, value: &FieldValue) {
 /// Send the full field value
 fn send_field_value(buf: &mut BitBuffer, field: &Field, value: &FieldValue) {
     // Determine actual field size: FL from rule -> FieldId default -> Rust type size
-    let field_bits: Option<u16> = field.get_field_length()
+    let field_bits: Option<u16> = field.field_length()
         .or_else(|| field.fid.default_size_bits());
 
     if let Some(n_bits) = field_bits {
@@ -233,7 +236,7 @@ fn send_lsb(buf: &mut BitBuffer, value: &FieldValue, num_bits: u8) {
 /// Get the field size in bits
 pub fn get_field_size_bits(field: &Field, value: &FieldValue) -> u16 {
     // Priority: 1. Explicit FL in rule, 2. FieldId default from JSON, 3. Value size
-    if let Some(fl) = field.get_field_length() {
+    if let Some(fl) = field.field_length() {
         return fl;
     }
 

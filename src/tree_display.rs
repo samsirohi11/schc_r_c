@@ -4,7 +4,6 @@
 //! human-readable format for debugging and analysis.
 
 use crate::parser::Direction;
-use crate::rule::{CompressionAction, MatchingOperator};
 use crate::tree::{TreeNode, END_MARKER};
 
 // =============================================================================
@@ -94,28 +93,13 @@ fn display_node(node: &TreeNode, prefix: &str, is_last: bool) {
             // Build value string - for match-mapping, show the mapping array
             let value_str = if let Some(mapping_values) = &branch.info.mapping_tv {
                 let mapping_strs: Vec<String> =
-                    mapping_values.iter().map(|v| v.to_string_repr()).collect();
+                    mapping_values.iter().map(|v| v.to_string()).collect();
                 format!("= [{}]", mapping_strs.join(", "))
             } else {
                 match &key.value {
                     Some(v) => format!("= 0x{}", hex::encode(v)),
                     None => "= *".to_string(),
                 }
-            };
-
-            let mo_str = match branch.info.mo {
-                MatchingOperator::Equal => "equal".to_string(),
-                MatchingOperator::Ignore => "ignore".to_string(),
-                MatchingOperator::MatchMapping => "mapping".to_string(),
-                MatchingOperator::Msb(n) => format!("MSB({})", n),
-            };
-
-            let cda_str = match branch.info.cda {
-                CompressionAction::NotSent => "not-sent",
-                CompressionAction::ValueSent => "value-sent",
-                CompressionAction::MappingSent => "mapping-sent",
-                CompressionAction::Lsb => "LSB",
-                CompressionAction::Compute => "compute",
             };
 
             // Get field length info
@@ -142,8 +126,8 @@ fn display_node(node: &TreeNode, prefix: &str, is_last: bool) {
                 branch.info.fid,
                 fl_str,
                 value_str,
-                mo_str,
-                cda_str,
+                branch.info.mo,
+                branch.info.cda,
                 direction_str
             );
 
@@ -218,28 +202,13 @@ fn display_node_with_filter(
             // Build value string - for match-mapping, show the mapping array
             let value_str = if let Some(mapping_values) = &branch.info.mapping_tv {
                 let mapping_strs: Vec<String> =
-                    mapping_values.iter().map(|v| v.to_string_repr()).collect();
+                    mapping_values.iter().map(|v| v.to_string()).collect();
                 format!("= [{}]", mapping_strs.join(", "))
             } else {
                 match &key.value {
                     Some(v) => format!("= 0x{}", hex::encode(v)),
                     None => "= *".to_string(),
                 }
-            };
-
-            let mo_str = match branch.info.mo {
-                MatchingOperator::Equal => "equal".to_string(),
-                MatchingOperator::Ignore => "ignore".to_string(),
-                MatchingOperator::MatchMapping => "mapping".to_string(),
-                MatchingOperator::Msb(n) => format!("MSB({})", n),
-            };
-
-            let cda_str = match branch.info.cda {
-                CompressionAction::NotSent => "not-sent",
-                CompressionAction::ValueSent => "value-sent",
-                CompressionAction::MappingSent => "mapping-sent",
-                CompressionAction::Lsb => "LSB",
-                CompressionAction::Compute => "compute",
             };
 
             // Get field length info
@@ -266,8 +235,8 @@ fn display_node_with_filter(
                 branch.info.fid,
                 fl_str,
                 value_str,
-                mo_str,
-                cda_str,
+                branch.info.mo,
+                branch.info.cda,
                 direction_str
             );
 

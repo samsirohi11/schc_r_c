@@ -1,8 +1,10 @@
 //! SCHC Rule structures and parsing
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 use crate::error::Result;
 use crate::field_id::FieldId;
 use crate::parser::Direction;
@@ -11,7 +13,7 @@ use crate::parser::Direction;
 ///
 /// When a field's length is not fixed at rule creation time, a FieldLength
 /// function specifies how to derive it at compression/decompression time.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldLength {
     /// Fixed bit length (the default — same as `fl` value)
     Fixed(u16),
@@ -28,39 +30,39 @@ pub enum FieldLength {
 }
 
 /// Parsed rule value types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleValue {
     U64(u64),
     Bytes(Vec<u8>),
     String(String),
 }
 
-impl RuleValue {
-    pub fn to_string_repr(&self) -> String {
+impl fmt::Display for RuleValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuleValue::U64(n) => n.to_string(),
+            RuleValue::U64(n) => write!(f, "{}", n),
             RuleValue::Bytes(bytes) => {
                 if bytes.len() == 4 {
                     // IPv4 address - display as dotted decimal
                     let addr = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
-                    addr.to_string()
+                    write!(f, "{}", addr)
                 } else if bytes.len() == 16 {
                     // Full IPv6 address
                     let mut arr = [0u8; 16];
                     arr.copy_from_slice(bytes);
                     let addr = Ipv6Addr::from(arr);
-                    addr.to_string()
+                    write!(f, "{}", addr)
                 } else {
                     // All other byte arrays use hex encoding
-                    format!("0x{}", hex::encode(bytes))
+                    write!(f, "0x{}", hex::encode(bytes))
                 }
             },
-            RuleValue::String(s) => s.clone(),
+            RuleValue::String(s) => write!(f, "{}", s),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedTargetValue {
     Single(RuleValue),
     Mapping(Vec<RuleValue>),
@@ -238,13 +240,13 @@ impl Field {
         }
     }
 
-    /// Get field length in bits if specified
-    pub fn get_field_length(&self) -> Option<u16> {
+    /// Returns the field length in bits if specified.
+    pub fn field_length(&self) -> Option<u16> {
         self.fl
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchingOperator {
     Equal,
     Ignore,
@@ -252,13 +254,36 @@ pub enum MatchingOperator {
     Msb(u8),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+impl fmt::Display for MatchingOperator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MatchingOperator::Equal => f.write_str("equal"),
+            MatchingOperator::Ignore => f.write_str("ignore"),
+            MatchingOperator::MatchMapping => f.write_str("mapping"),
+            MatchingOperator::Msb(n) => write!(f, "MSB({})", n),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionAction {
     NotSent,
     ValueSent,
     MappingSent,
     Lsb,
     Compute,
+}
+
+impl fmt::Display for CompressionAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompressionAction::NotSent => f.write_str("not-sent"),
+            CompressionAction::ValueSent => f.write_str("value-sent"),
+            CompressionAction::MappingSent => f.write_str("mapping-sent"),
+            CompressionAction::Lsb => f.write_str("LSB"),
+            CompressionAction::Compute => f.write_str("compute"),
+        }
+    }
 }
 
 fn deserialize_mo<'de, D>(deserializer: D) -> std::result::Result<MatchingOperator, D::Error>
@@ -410,26 +435,32 @@ fn parse_single_value(tv_json: &serde_json::Value, fid: FieldId) -> Option<RuleV
 }
 
 /// Collection of SCHC rules
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuleSet {
     pub rules: Vec<Rule>,
 }
 
 impl RuleSet {
-    pub fn from_file(path: &str) -> Result<Self> {
-        let content = fs::read_to_string(path)?;
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let content = fs::read_to_string(path)
+            .map_err(|e| crate::error::SchcError::Io(
+                std::io::Error::new(e.kind(), format!("{}: {}", path.display(), e))
+            ))?;
         Self::from_json(&content)
     }
-    
+
     pub fn from_json(json: &str) -> Result<Self> {
         let mut rules: Vec<Rule> = serde_json::from_str(json)?;
 
         for rule in &mut rules {
-            // Validate rule ID
+            // Validate rule ID range
             let max_rule_id = (1u64 << rule.rule_id_length) - 1;
             if rule.rule_id as u64 > max_rule_id {
-                eprintln!("Warning: Rule {} has ID that exceeds {}-bit range (max: {})",
-                    rule.rule_id, rule.rule_id_length, max_rule_id);
+                return Err(crate::error::SchcError::RuleValidation(format!(
+                    "Rule {} has ID that exceeds {}-bit range (max: {})",
+                    rule.rule_id, rule.rule_id_length, max_rule_id
+                )));
             }
             
             for field in &mut rule.compression {
@@ -563,8 +594,8 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_rule_value_to_string_repr() {
-        assert_eq!(RuleValue::U64(42).to_string_repr(), "42");
-        assert_eq!(RuleValue::String("test".to_string()).to_string_repr(), "test");
+    fn test_rule_value_display() {
+        assert_eq!(RuleValue::U64(42).to_string(), "42");
+        assert_eq!(RuleValue::String("test".to_string()).to_string(), "test");
     }
 }
